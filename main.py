@@ -10,8 +10,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 from langchain.agents import AgentExecutor, create_react_agent, Tool
 
-# Новые импорты для инструментов
-from langchain_tavily import TavilySearchResults # Обновленный импорт
+# ИЗМЕНЕНИЕ 1: Правильный импорт из новой библиотеки
+from langchain_tavily import TavilySearch
 from langchain.chains import RetrievalQA
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
@@ -31,8 +31,8 @@ print("✅ LLM и модель эмбеддингов инициализиров
 
 # --- 4. Создание Инструментов ---
 print("Инициализация инструментов...")
-# Инструмент 1: Поиск в интернете
-search_tool = TavilySearchResults(max_results=3)
+# ИЗМЕНЕНИЕ 2: Используем правильное имя класса
+search_tool = TavilySearch(max_results=3)
 search_tool.description = "Используй для всех вопросов о текущих событиях, фактах, погоде или любой информации из реального мира. Это твой инструмент по умолчанию."
 
 # Инструмент 2: Архивариус (для работы с PDF)
@@ -97,10 +97,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # --- 7. Основная функция запуска бота ---
 def main() -> None:
     application = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🚀 Запускаю Telegram-бота...")
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
+    application.add_handler(CommandHandler("start
