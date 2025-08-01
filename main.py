@@ -2,134 +2,120 @@
 import os
 from dotenv import load_dotenv
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Импортируем нашу ИИ-логику
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain.chains import RetrievalQA
+# Основные компоненты для создания Агента
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
+from langchain.agents import AgentExecutor, create_react_agent, Tool
 
-# --- 2. Настройка логирования ---
-# Чтобы видеть информацию о работе бота в терминале
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Инструменты
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain.chains import RetrievalQA
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_chroma import Chroma
 
-# --- 3. Настройка окружения ---
+# --- 2. Настройка ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 load_dotenv()
-if "GOOGLE_API_KEY" not in os.environ or "TELEGRAM_BOT_TOKEN" not in os.environ:
+if "GOOGLE_API_KEY" not in os.environ or "TAVILY_API_KEY" not in os.environ:
     raise ValueError("Не найдены необходимые ключи API в .env файле!")
 print("✅ Ключи API загружены.")
 
-# --- 4. Инициализация ИИ-компонентов ---
+# --- 3. Инициализация LLM и Эмбеддингов ---
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7)
-router_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 print("✅ LLM и модель эмбеддингов инициализированы.")
 
-# --- 5. Функции для создания Агентов ---
-def create_archivist_agent():
-    print("Инициализация Агента «Архивариус»...")
-    vector_store_archivist = Chroma(persist_directory="./chroma_db_archivist", embedding_function=embeddings)
-    if not vector_store_archivist._collection.count():
-        print("База «Архивариуса» пуста. Загружаем документ...")
-        loader = PyPDFLoader("docs/document.pdf")
-        documents = loader.load()
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-        texts = text_splitter.split_documents(documents)
-        vector_store_archivist.add_documents(texts)
-        print("✅ Документ загружен в базу «Архивариуса».")
-    else:
-        print("✅ База «Архивариуса» уже существует.")
-    return RetrievalQA.from_chain_type(llm, retriever=vector_store_archivist.as_retriever())
+# --- 4. Создание Инструментов ---
 
-def create_analyst_agent():
-    print("Инициализация Агента «Аналитик»...")
-    vector_store_analyst = Chroma(persist_directory="./chroma_db_analyst", embedding_function=embeddings)
-    if not vector_store_analyst._collection.count():
-        print("База «Аналитика» пуста. Создаем знания...")
-        analyst_texts = [
-            "Бычий рынок - это состояние рынка, когда цены на акции растут или ожидается их рост.",
-            "Медвежий рынок - это состояние, когда цены на акции падают, и ожидается продолжение этого тренда.",
-            "Диверсификация - это стратегия инвестирования, направленная на снижение рисков путем вложения средств в различные активы."
-        ]
-        vector_store_analyst.add_texts(texts=analyst_texts)
-        print("✅ База «Аналитика» создана.")
-    else:
-        print("✅ База «Аналитика» уже существует.")
-    return RetrievalQA.from_chain_type(llm, retriever=vector_store_analyst.as_retriever())
+# Инструмент 1: Поиск в интернете
+# max_results=3 означает, что он будет возвращать 3 самых релевантных результата
+search_tool = TavilySearchResults(max_results=3)
 
-# --- 6. Логика Диспетчера ---
-router_template = """Твоя задача - направить вопрос пользователя к одному из двух специалистов. Ответь ТОЛЬКО одним словом: 'Архивариус' или 'Аналитик'. Не добавляй ничего лишнего.
-Специалисты:
-- Аналитик: Специалист по общим вопросам о финансах, экономике и инвестициях. Выбирай его, если вопрос касается таких тем, как 'акции', 'рынок', 'инвестиции', 'диверсификация', 'бычий рынок', 'медвежий рынок'.
-- Архивариус: Специалист по содержанию КОНКРЕТНОГО загруженного документа. Выбирай его, если вопрос явно ссылается на документ ("что в документе...", "расскажи из файла про...") или если вопрос не имеет отношения к финансам.
-Вопрос пользователя: '{user_question}'
-Выбранный специалист:"""
-prompt = PromptTemplate(template=router_template, input_variables=["user_question"])
-router_chain = prompt | router_llm
+# Инструмент 2: Архивариус (для работы с PDF)
+# Мы "оборачиваем" нашего старого агента в новый инструмент
+archivist_db = Chroma(persist_directory="./chroma_db_archivist", embedding_function=embeddings)
+archivist_chain = RetrievalQA.from_chain_type(llm, retriever=archivist_db.as_retriever())
+archivist_tool = Tool(
+    name="Archivist",
+    func=archivist_chain.invoke,
+    description="Используй этот инструмент для ответов на вопросы о содержании конкретного загруженного документа."
+)
 
-# --- 7. Создаем агентов при старте ---
-print("--- Создание ИИ-агентов ---")
-archivist_agent = create_archivist_agent()
-analyst_agent = create_analyst_agent()
-print("--- Все агенты готовы ---")
+# Инструмент 3: Аналитик (для работы с финансами)
+analyst_db = Chroma(persist_directory="./chroma_db_analyst", embedding_function=embeddings)
+analyst_chain = RetrievalQA.from_chain_type(llm, retriever=analyst_db.as_retriever())
+analyst_tool = Tool(
+    name="Analyst",
+    func=analyst_chain.invoke,
+    description="Используй этот инструмент для ответов на вопросы об общих финансовых и рыночных терминах (акции, рынок, инвестиции)."
+)
 
-# --- 8. Функции-обработчики для Telegram ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет приветственное сообщение при команде /start."""
-    await update.message.reply_text('Привет! Я ваш ИИ-ассистент. Задайте мне любой вопрос.')
+# Собираем все инструменты в один список
+tools = [search_tool, archivist_tool, analyst_tool]
+print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает текстовые сообщения от пользователя."""
-    user_query = update.message.text
-    chat_id = update.message.chat_id
-    logger.info(f"Получен вопрос от chat_id {chat_id}: '{user_query}'")
 
-    await update.message.reply_text('Думаю...')
+# --- 5. Создание Главного Агента ---
+
+# Улучшенный промпт с более четкими инструкциями для агента
+agent_prompt_template = """Ты — умный ИИ-ассистент. Твоя задача — ответить на вопрос пользователя, выбрав наиболее подходящий инструмент.
+
+ТЫ ДОЛЖЕН СЛЕДОВАТЬ ЭТОМУ АЛГОРИТМУ:
+1.  Проанализируй вопрос пользователя.
+2.  Посмотри на список доступных инструментов и их описания.
+3.  Выбери ОДИН инструмент, который лучше всего подходит для ответа.
+4.  Если сомневаешься, используй инструмент "tavily_search_results_json".
+
+ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
+{tools}
+
+ИСПОЛЬЗУЙ СЛЕДУЮЩИЙ ФОРМАТ ДЛЯ ОТВЕТА:
+
+Question: вопрос, на который ты должен ответить
+Thought: Мои размышления. Какой инструмент лучше всего подходит и почему?
+Action: Название инструмента из списка [{tool_names}]
+Action Input: Входные данные для инструмента (обычно это сам вопрос пользователя).
+Observation: Результат выполнения инструмента (это поле заполняется автоматически).
+... (этот цикл Thought/Action/Action Input/Observation может повторяться, если нужно использовать несколько инструментов последовательно)
+Thought: Теперь у меня есть вся информация для ответа.
+Final Answer: Финальный, полный и развернутый ответ на исходный вопрос пользователя.
+
+Начинаем!
+
+Question: {input}
+Thought:{agent_scratchpad}"""
+
+# Создаем промпт на основе шаблона
+agent_prompt = PromptTemplate.from_template(agent_prompt_template)
+
+# Также давайте улучшим описания самих инструментов
+archivist_tool.description = "Используй ТОЛЬКО для ответов на вопросы, которые явно касаются содержания загруженного PDF документа. Например: 'что говорится в документе о...?'"
+analyst_tool.description = "Используй ТОЛЬКО для ответов на вопросы об общих финансовых и рыночных терминах. Например: 'что такое бычий рынок?'"
+search_tool.description = "Используй для всех остальных вопросов, особенно если они касаются текущих событий, фактов, погоды или любой информации из реального мира. Это твой инструмент по умолчанию."
+
+
+# Создаем Агента
+agent = create_react_agent(llm, tools, agent_prompt)
+
+# Создаем Исполнителя Агента (Agent Executor)
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
+print("✅ Главный Агент создан с улучшенной логикой.")
+
+
+# --- 6. Запуск цикла общения ---
+print("\n✅ Агент с доступом в интернет готов. Задавайте любой вопрос.")
+print("   Для выхода введите 'exit'.")
+
+while True:
+    query = input("\n> Ваш вопрос: ")
+    if query.lower() == 'exit':
+        print("До свидания!")
+        break
 
     try:
-        # 1. Вызываем Диспетчера
-        chosen_agent_name = router_chain.invoke({"user_question": user_query}).content.strip()
-        logger.info(f"Диспетчер выбрал: '{chosen_agent_name}'")
-
-        # 2. Вызываем нужного агента
-        if "Архивариус" in chosen_agent_name:
-            result = archivist_agent.invoke({"query": user_query})
-        elif "Аналитик" in chosen_agent_name:
-            result = analyst_agent.invoke({"query": user_query})
-        else:
-            logger.warning("Не удалось определить агента, обращаюсь к Архивариусу по умолчанию.")
-            result = archivist_agent.invoke({"query": user_query})
-        
-        # 3. Отправляем ответ пользователю
-        response_text = result["result"]
-        await update.message.reply_text(response_text)
-        logger.info(f"Отправлен ответ для chat_id {chat_id}.")
-
+        # Вызываем исполнителя агента
+        result = agent_executor.invoke({"input": query})
+        print("\nОтвет: ", result['output'])
     except Exception as e:
-        logger.error(f"Произошла ошибка при обработке запроса: {e}", exc_info=True)
-        await update.message.reply_text(f"Произошла внутренняя ошибка. Попробуйте еще раз позже.\nОшибка: {e}")
-
-# --- 9. Основная функция запуска бота ---
-def main() -> None:
-    """Запускает Telegram-бота."""
-    # Создаем приложение и передаем ему токен
-    application = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
-
-    # Добавляем обработчики команд и сообщений
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Запускаем бота (он будет работать, пока вы не остановите его вручную)
-    print("🚀 Запускаю Telegram-бота...")
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
+        print(f"\nПроизошла ошибка: {e}")
