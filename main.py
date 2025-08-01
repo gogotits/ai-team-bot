@@ -92,7 +92,7 @@ print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}
 # Создаем память, которая будет хранить 4 последних сообщения
 memory = ConversationBufferWindowMemory(k=4, memory_key="chat_history", input_key="input")
 
-# Обновляем промпт, добавляя в него переменную `chat_history`
+# Обновляем промпт, добавляя и историю, и новое правило для файлов
 agent_prompt_template = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — ответить на вопрос пользователя, выбрав наиболее подходящий инструмент.
 Ты имеешь доступ к истории предыдущего диалога.
 
@@ -102,6 +102,8 @@ agent_prompt_template = """Ты — умный и дружелюбный ИИ-а
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
 {tools}
 
+ВАЖНОЕ ПРАВИЛО: Если ты используешь инструмент для создания документа (CreateWordDocument, CreateExcelDocument, CreatePdfDocument), твой 'Final Answer' должен быть ТОЛЬКО путем к файлу, который вернул инструмент, и ничем больше.
+
 ИСПОЛЬЗУЙ СЛЕДУЮЩИЙ ФОРМАТ ДЛЯ ОТВЕТА:
 Question: вопрос, на который ты должен ответить
 Thought: Мои размышления. Какой инструмент лучше всего подходит и почему? Учитываю ли я историю диалога?
@@ -109,22 +111,23 @@ Action: Название инструмента из списка [{tool_names}]
 Action Input: Входные данные для инструмента.
 Observation: Результат выполнения инструмента.
 Thought: Теперь у меня есть вся информация для ответа.
-Final Answer: Финальный, полный и развернутый ответ на исходный вопрос пользователя.
+Final Answer: Финальный, полный и развернутый ответ на исходный вопрос пользователя ИЛИ ТОЛЬКО ПУТЬ К ФАЙЛУ, ЕСЛИ ОН БЫЛ СОЗДАН.
 
 Начинаем!
 
 Question: {input}
 Thought:{agent_scratchpad}"""
+
 agent_prompt = ChatPromptTemplate.from_template(agent_prompt_template)
 agent = create_react_agent(llm, tools, agent_prompt)
 agent_executor = AgentExecutor(
     agent=agent,
     tools=tools,
-    memory=memory, # <-- ДОБАВЛЯЕМ ПАМЯТЬ
+    memory=memory, # <-- Память остается на месте
     verbose=True,
     handle_parsing_errors=True
 )
-print("✅ Главный Агент c памятью создан.")
+print("✅ Главный Агент c памятью и улучшенной логикой создан.")
 
 # --- 7. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
