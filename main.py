@@ -52,8 +52,23 @@ tools = [search_tool, archivist_tool, analyst_tool]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
 # --- 5. Создание Главного Агента ---
-agent_prompt_template = """Ты — умный ИИ-ассистент... (весь ваш длинный промпт остается здесь без изменений)"""
-# ... (весь остальной код для создания agent_executor остается здесь)
+
+# ВОТ ИСПРАВЛЕННЫЙ БЛОК, КОТОРЫЙ БЫЛ ПРОПУЩЕН
+agent_prompt_template = """Ты — умный ИИ-ассистент. Твоя задача — ответить на вопрос пользователя, выбрав наиболее подходящий инструмент.
+ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
+{tools}
+ИСПОЛЬЗУЙ СЛЕДУЮЩИЙ ФОРМАТ ДЛЯ ОТВЕТА:
+Question: вопрос, на который ты должен ответить
+Thought: Мои размышления. Какой инструмент лучше всего подходит и почему?
+Action: Название инструмента из списка [{tool_names}]
+Action Input: Входные данные для инструмента (обычно это сам вопрос пользователя).
+Observation: Результат выполнения инструмента (это поле заполняется автоматически).
+Thought: Теперь у меня есть вся информация для ответа.
+Final Answer: Финальный, полный и развернутый ответ на исходный вопрос пользователя.
+Начинаем!
+Question: {input}
+Thought:{agent_scratchpad}"""
+
 agent_prompt = PromptTemplate.from_template(agent_prompt_template)
 agent = create_react_agent(llm, tools, agent_prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
@@ -78,52 +93,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Ошибка при обработке текста: {e}", exc_info=True)
         await update.message.reply_text(f"Произошла внутренняя ошибка: {e}")
 
-# НОВАЯ ФУНКЦИЯ для обработки фото
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info("Получено изображение.")
     await update.message.reply_text('Анализирую изображение...')
     
     try:
-        # Получаем файл изображения с самым высоким разрешением
         photo_file = await update.message.photo[-1].get_file()
-        photo_bytes = await photo_file.download_as_bytearray()
-
-        # Получаем подпись к фото, если она есть. Если нет - задаем вопрос по умолчанию.
-        user_caption = update.message.caption
-        if not user_caption:
-            user_caption = "Опиши это изображение подробно."
-        
-        # Создаем сообщение для мультимодальной модели
-        message_payload = HumanMessage(
-            content=[
-                {"type": "text", "text": user_caption},
-                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{photo_bytes}"},
-            ]
-        )
-        
-        # Напрямую вызываем LLM для анализа изображения
-        response = llm.invoke([message_payload])
-        
-        await update.message.reply_text(response.content)
-        logger.info("Отправлен ответ на изображение.")
-
-    except Exception as e:
-        logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
-        await update.message.reply_text(f"Не удалось обработать изображение. Ошибка: {e}")
-
-
-# --- 7. Основная функция запуска бота ---
-def main() -> None:
-    application = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
-
-    # Добавляем обработчики команд и сообщений
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    # ДОБАВЛЯЕМ новый обработчик для фото
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
-
-    print("🚀 Запускаю Telegram-бота с функцией зрения...")
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
+        # Используем download
