@@ -79,17 +79,20 @@ def create_pdf_document(content: str) -> str:
     return temp_file.name
 
 # НОВАЯ ФУНКЦИЯ ДЛЯ САМООБУЧЕНИЯ
+# Стало:
 def research_and_learn(topic: str) -> str:
     """Ищет информацию в интернете по теме, анализирует ее и добавляет в базу знаний Архивариуса."""
     logger.info(f"Начинаю исследование по теме: {topic}")
     search = TavilySearch()
-    search_results = search.invoke(topic)
+    # Устанавливаем include_raw_content=True, чтобы получить полные тексты
+    search_results = search.invoke({"query": topic, "include_raw_content": True})
     
     if not search_results:
         return "Не удалось найти информацию по данной теме."
 
     # Собираем весь найденный контент в один большой текст
     full_text = f"Отчет по теме: {topic}\n\n"
+    # Теперь search_results - это список словарей, как и ожидалось
     for result in search_results:
         full_text += result.get("content", "") + "\n\n"
         
@@ -100,7 +103,7 @@ def research_and_learn(topic: str) -> str:
     
     logger.info(f"Информация по теме '{topic}' успешно найдена и добавлена в базу знаний Архивариуса.")
     return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
-
+    
 # --- 5. Определение Инструментов ---
 archivist_chain = RetrievalQA.from_chain_type(llm, retriever=archivist_db.as_retriever())
 analyst_chain = RetrievalQA.from_chain_type(llm, retriever=analyst_db.as_retriever())
