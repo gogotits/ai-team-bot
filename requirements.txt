@@ -116,3 +116,6 @@ yarl==1.20.1
 zipp==3.23.0
 zstandard==0.23.0
 langchain-tavily
+python-docx
+openpyxl
+fpdf2

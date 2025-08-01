@@ -1,10 +1,17 @@
 # --- 1. Загрузка библиотек ---
 import os
 import logging
-import base64  # <-- НОВЫЙ ИМПОРТ для правильной обработки изображений
+import base64
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from datetime import datetime
+import tempfile # Для временных файлов
+
+# Библиотеки для создания документов
+from docx import Document as WordDocument
+from openpyxl import Workbook as ExcelWorkbook
+from fpdf import FPDF
 
 # Основные компоненты для создания Агента
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -31,7 +38,35 @@ llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 print("✅ LLM и модель эмбеддингов инициализированы.")
 
-# --- 4. Создание Инструментов ---
+# --- 4. Функции для создания документов ---
+def create_word_document(content: str) -> str:
+    doc = WordDocument()
+    doc.add_paragraph(content)
+    temp_file = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+    doc.save(temp_file.name)
+    return temp_file.name
+
+def create_excel_document(data: list) -> str:
+    wb = ExcelWorkbook()
+    ws = wb.active
+    for row_data in data:
+        ws.append(row_data)
+    temp_file = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    wb.save(temp_file.name)
+    return temp_file.name
+
+def create_pdf_document(content: str) -> str:
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    # Разбиваем текст на строки, чтобы избежать переполнения
+    for line in content.split('\n'):
+        pdf.cell(200, 10, txt=line, ln=1)
+    temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    pdf.output(temp_file.name, "F")
+    return temp_file.name
+
+# --- 5. Создание Инструментов ---
 print("Инициализация инструментов...")
 search_tool = TavilySearch(max_results=3)
 search_tool.description = "Используй для всех вопросов о текущих событиях, фактах, погоде или любой информации из реального мира. Это твой инструмент по умолчанию."
@@ -49,10 +84,26 @@ analyst_tool = Tool(
     func=analyst_chain.invoke,
     description="Используй ТОЛЬКО для ответов на вопросы об общих финансовых и рыночных терминах. Например: 'что такое бычий рынок?'"
 )
-tools = [search_tool, archivist_tool, analyst_tool]
+# НОВЫЕ ИНСТРУМЕНТЫ ДЛЯ СОЗДАНИЯ ДОКУМЕНТОВ
+create_word_tool = Tool(
+    name="CreateWordDocument",
+    func=lambda content: create_word_document(content["content"]),
+    description="Используй для создания и сохранения документа Microsoft Word (.docx) с предоставленным текстом."
+)
+create_excel_tool = Tool(
+    name="CreateExcelDocument",
+    func=lambda data: create_excel_document(data["data"]),
+    description="Используй для создания и сохранения документа Microsoft Excel (.xlsx) с предоставленными данными (список списков)."
+)
+create_pdf_tool = Tool(
+    name="CreatePdfDocument",
+    func=lambda content: create_pdf_document(content["content"]),
+    description="Используй для создания и сохранения PDF документа (.pdf) с предоставленным текстом."
+)
+tools = [search_tool, archivist_tool, analyst_tool, create_word_tool, create_excel_tool, create_pdf_tool]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-# --- 5. Создание Главного Агента ---
+# --- 6. Создание Главного Агента ---
 agent_prompt_template = """Ты — умный ИИ-ассистент. Твоя задача — ответить на вопрос пользователя, выбрав наиболее подходящий инструмент.
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
 {tools}
@@ -72,9 +123,9 @@ agent = create_react_agent(llm, tools, agent_prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
 print("✅ Главный Агент создан с улучшенной логикой.")
 
-# --- 6. Функции-обработчики для Telegram ---
+# --- 7. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text('Привет! Я ваш автономный ИИ-ассистент. Задайте мне любой вопрос или отправьте картинку.')
+    await update.message.reply_text('Привет! Я ваш автономный ИИ-ассистент. Задайте мне любой вопрос, отправьте картинку или попросите создать документ.')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
@@ -83,8 +134,18 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         result = agent_executor.invoke({"input": user_query})
         response_text = result["output"]
-        await update.message.reply_text(response_text)
-        logger.info("Отправлен ответ на текстовый вопрос.")
+        # Проверяем, не является ли ответ путем к файлу
+        if response_text.endswith(('.docx', '.xlsx', '.pdf')):
+            try:
+                await context.bot.send_document(chat_id=update.effective_chat.id, document=open(response_text, 'rb'))
+                os.remove(response_text) # Удаляем временный файл после отправки
+                logger.info(f"Документ отправлен: {response_text}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке документа: {e}", exc_info=True)
+                await update.message.reply_text(f"Не удалось отправить документ. Ошибка: {e}")
+        else:
+            await update.message.reply_text(response_text)
+            logger.info("Отправлен текстовый ответ.")
     except Exception as e:
         logger.error(f"Ошибка при обработке текста: {e}", exc_info=True)
         await update.message.reply_text(f"Произошла внутренняя ошибка: {e}")
@@ -96,10 +157,9 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         user_caption = update.message.caption or "Опиши это изображение подробно."
-        
-        # Правильно кодируем изображение в base64
+
         base64_image = base64.b64encode(photo_bytes).decode("utf-8")
-        
+
         message_payload = HumanMessage(
             content=[
                 {"type": "text", "text": user_caption},
@@ -113,13 +173,13 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
         await update.message.reply_text(f"Не удалось обработать изображение. Ошибка: {e}")
 
-# --- 7. Основная функция запуска бота ---
+# --- 8. Основная функция запуска бота ---
 def main() -> None:
     application = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
-    print("🚀 Запускаю Telegram-бота с функцией зрения...")
+    print("🚀 Запускаю Telegram-бота с функциями зрения и создания документов...")
     application.run_polling()
 
 if __name__ == '__main__':
