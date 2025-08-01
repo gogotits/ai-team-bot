@@ -40,30 +40,36 @@ print("✅ LLM и модель эмбеддингов инициализиров
 
 # --- 4. Функции для создания документов ---
 def create_word_document(content: str) -> str:
+    """Создает Word документ и возвращает путь к нему."""
     doc = WordDocument()
     doc.add_paragraph(content)
-    temp_file = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+    # Используем временный файл, чтобы не засорять папку проекта
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
     doc.save(temp_file.name)
     return temp_file.name
 
-def create_excel_document(data: list) -> str:
+def create_excel_document(content: str) -> str:
+    """Создает Excel документ из текста и возвращает путь."""
+    # Упрощенная версия: каждая строка текста - это строка в Excel
     wb = ExcelWorkbook()
     ws = wb.active
-    for row_data in data:
-        ws.append(row_data)
-    temp_file = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    for line in content.split('\n'):
+        ws.append(line.split(',')) # Предполагаем, что данные разделены запятыми
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
     wb.save(temp_file.name)
     return temp_file.name
 
 def create_pdf_document(content: str) -> str:
+    """Создает PDF документ и возвращает путь."""
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    # Разбиваем текст на строки, чтобы избежать переполнения
-    for line in content.split('\n'):
-        pdf.cell(200, 10, txt=line, ln=1)
-    temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    pdf.output(temp_file.name, "F")
+    # Устанавливаем шрифт, который поддерживает кириллицу
+    pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+    pdf.set_font('DejaVu', '', 12)
+    # Используем multi_cell для автоматического переноса строк
+    pdf.multi_cell(0, 10, content)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
+    pdf.output(temp_file.name)
     return temp_file.name
 
 # --- 5. Создание Инструментов ---
@@ -84,26 +90,27 @@ analyst_tool = Tool(
     func=analyst_chain.invoke,
     description="Используй ТОЛЬКО для ответов на вопросы об общих финансовых и рыночных терминах. Например: 'что такое бычий рынок?'"
 )
-# НОВЫЕ ИНСТРУМЕНТЫ ДЛЯ СОЗДАНИЯ ДОКУМЕНТОВ
+# ИСПРАВЛЕНИЕ: Упрощаем лямбда-функции, чтобы они принимали строку
 create_word_tool = Tool(
     name="CreateWordDocument",
-    func=lambda content: create_word_document(content["content"]),
-    description="Используй для создания и сохранения документа Microsoft Word (.docx) с предоставленным текстом."
+    func=create_word_document,
+    description="Используй для создания и сохранения документа Microsoft Word (.docx). Входные данные должны быть строкой с текстом для документа."
 )
 create_excel_tool = Tool(
     name="CreateExcelDocument",
-    func=lambda data: create_excel_document(data["data"]),
-    description="Используй для создания и сохранения документа Microsoft Excel (.xlsx) с предоставленными данными (список списков)."
+    func=create_excel_document,
+    description="Используй для создания и сохранения документа Microsoft Excel (.xlsx). Входные данные должны быть строкой, где строки таблицы разделены переносом строки, а ячейки - запятыми."
 )
 create_pdf_tool = Tool(
     name="CreatePdfDocument",
-    func=lambda content: create_pdf_document(content["content"]),
-    description="Используй для создания и сохранения PDF документа (.pdf) с предоставленным текстом."
+    func=create_pdf_document,
+    description="Используй для создания и сохранения PDF документа (.pdf). Входные данные должны быть строкой с текстом для документа."
 )
 tools = [search_tool, archivist_tool, analyst_tool, create_word_tool, create_excel_tool, create_pdf_tool]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
 # --- 6. Создание Главного Агента ---
+# (Этот блок остается без изменений)
 agent_prompt_template = """Ты — умный ИИ-ассистент. Твоя задача — ответить на вопрос пользователя, выбрав наиболее подходящий инструмент.
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
 {tools}
@@ -111,7 +118,7 @@ agent_prompt_template = """Ты — умный ИИ-ассистент. Твоя
 Question: вопрос, на который ты должен ответить
 Thought: Мои размышления. Какой инструмент лучше всего подходит и почему?
 Action: Название инструмента из списка [{tool_names}]
-Action Input: Входные данные для инструмента (обычно это сам вопрос пользователя).
+Action Input: Входные данные для инструмента (обычно это сам вопрос пользователя или отформатированный текст).
 Observation: Результат выполнения инструмента (это поле заполняется автоматически).
 Thought: Теперь у меня есть вся информация для ответа.
 Final Answer: Финальный, полный и развернутый ответ на исходный вопрос пользователя.
@@ -130,12 +137,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
     logger.info(f"Получен текстовый вопрос: '{user_query}'")
-    await update.message.reply_text('Думаю над вашим текстом...')
+    await update.message.reply_text('Думаю...')
     try:
         result = agent_executor.invoke({"input": user_query})
         response_text = result["output"]
         # Проверяем, не является ли ответ путем к файлу
-        if response_text.endswith(('.docx', '.xlsx', '.pdf')):
+        if os.path.exists(response_text) and response_text.endswith(('.docx', '.xlsx', '.pdf')):
             try:
                 await context.bot.send_document(chat_id=update.effective_chat.id, document=open(response_text, 'rb'))
                 os.remove(response_text) # Удаляем временный файл после отправки
@@ -157,9 +164,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         user_caption = update.message.caption or "Опиши это изображение подробно."
-
         base64_image = base64.b64encode(photo_bytes).decode("utf-8")
-
         message_payload = HumanMessage(
             content=[
                 {"type": "text", "text": user_caption},
