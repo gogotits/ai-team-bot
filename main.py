@@ -6,14 +6,11 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import tempfile
-from langchain.agents.format_scratchpad.tools import render_text_description
 
-# Библиотеки для документов
 from docx import Document as WordDocument
 from openpyxl import Workbook as ExcelWorkbook
 from fpdf import FPDF
 
-# Основные компоненты LangChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from langchain.agents import AgentExecutor, create_tool_calling_agent, Tool
@@ -23,6 +20,8 @@ from langchain_tavily import TavilySearch
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+# ИСПРАВЛЕНИЕ: Правильный путь для импорта
+from langchain_core.utils.function_calling import render_text_description
 
 # --- 2. Настройка ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -44,7 +43,6 @@ main_db = Chroma(persist_directory=persistent_storage_path, embedding_function=e
 retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
-# --- Функции-инструменты ---
 def create_word_document(content: str) -> str:
     doc = WordDocument()
     doc.add_paragraph(content)
@@ -60,7 +58,6 @@ def retrieve_from_memory(query: str) -> str:
     return "\n".join([doc.page_content for doc in docs])
 
 # --- 5. СОЗДАНИЕ СПЕЦИАЛИСТОВ (Вспомогательных Агентов) ---
-
 def create_specialist_agent(persona: str, specialist_tools: list) -> AgentExecutor:
     """Фабрика для создания stateless-агентов-специалистов."""
     prompt = ChatPromptTemplate.from_messages([
@@ -71,7 +68,6 @@ def create_specialist_agent(persona: str, specialist_tools: list) -> AgentExecut
     agent = create_tool_calling_agent(llm, specialist_tools, prompt)
     return AgentExecutor(agent=agent, tools=specialist_tools, verbose=True)
 
-# Создаем Агента-Историка
 historian_persona = "Ты — профессиональный историк. Твоя задача — предоставлять точные, подробные и объективные ответы на исторические вопросы, используя поиск в интернете."
 historian_agent = create_specialist_agent(historian_persona, [TavilySearch(max_results=5)])
 
@@ -112,10 +108,9 @@ main_prompt = ChatPromptTemplate.from_messages([
     ("human", "{input}"),
     MessagesPlaceholder("agent_scratchpad"),
 ])
-
-# Стало:
-# Важное изменение: передаем инструменты напрямую в prompt.
+# Передаем инструменты напрямую в prompt
 main_prompt = main_prompt.partial(tools=render_text_description(main_tools))
+
 main_agent = create_tool_calling_agent(llm, main_tools, main_prompt)
 memory = ConversationBufferWindowMemory(k=8, memory_key="chat_history", return_messages=True)
 main_agent_executor = AgentExecutor(
@@ -167,7 +162,6 @@ def main() -> None:
     application = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    # Мы убрали обработку фото в этой версии для упрощения
     print("🚀 Запускаю иерархического Telegram-бота...")
     application.run_polling()
 
