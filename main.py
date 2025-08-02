@@ -40,8 +40,8 @@ print("✅ LLM и модель эмбеддингов инициализиров
 
 # --- 4. Инициализация Баз Знаний и Функций-Инструментов ---
 print("Инициализация баз знаний и инструментов...")
-archivist_db = Chroma(persist_directory="./chroma_db_archivist", embedding_function=embeddings)
-analyst_db = Chroma(persist_directory="./chroma_db_analyst", embedding_function=embeddings)
+archivist_db = Chroma(persist_directory="/var/data/chroma_db_archivist", embedding_function=embeddings)
+analyst_db = Chroma(persist_directory="/var/data/chroma_db_analyst", embedding_function=embeddings)
 
 def create_word_document(content: str) -> str:
     doc = WordDocument()
