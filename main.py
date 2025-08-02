@@ -116,7 +116,8 @@ tools = [
     ),
     Tool(
         name="Archivist",
-        func=lambda d: smart_archivist_chain.invoke(d).get("answer", "Не удалось извлечь ответ."),
+        # ИСПРАВЛЕНИЕ: Преобразуем строковый ввод 'query' в словарь {"input": query}
+        func=lambda query: smart_archivist_chain.invoke({"input": query}).get("answer", "Не удалось извлечь ответ."),
         description="Используй для ответов на вопросы по информации, которая УЖЕ ЕСТЬ в памяти."
     ),
     Tool(name="CreateWordDocument", func=create_word_document, description="Используй для создания документа Word (.docx)."),
