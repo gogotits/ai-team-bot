@@ -44,9 +44,7 @@ retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
 # --- Функции-инструменты ---
-
 def retrieve_from_memory(query: str) -> str:
-    """Ищет ответ на запрос в долгосрочной памяти (базе знаний)."""
     logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
@@ -54,11 +52,9 @@ def retrieve_from_memory(query: str) -> str:
     return "\n".join([doc.page_content for doc in docs])
 
 def research_and_learn(topic: str) -> str:
-    """Исследует тему в интернете, создает саммари и сохраняет его в долгосрочную память."""
     logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
     search = TavilySearch(max_results=3)
     try:
-        # Tavily возвращает список словарей, извлекаем 'content'
         search_results = search.invoke(topic)
     except Exception as e:
         logger.error(f"Ошибка при поиске в Tavily: {e}")
@@ -66,21 +62,19 @@ def research_and_learn(topic: str) -> str:
     if not search_results:
         return "Не удалось найти информацию по данной теме в интернете."
     
-    raw_text = "\n\n".join([result.get('content', '') for result in search_results])
+    # ИСПРАВЛЕНИЕ: Обрабатываем search_results как список простых строк
+    raw_text = "\n\n".join(search_results)
     
     summarizer_prompt = f"""Проанализируй следующий текст, найденный по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари, без лишних фраз. ТЕКСТ ДЛЯ АНАЛИЗА:\n{raw_text}"""
     summary = llm.invoke(summarizer_prompt).content
     logger.info("Создано саммари найденной информации.")
-
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
-    
     main_db.add_documents(texts)
     logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
     return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти. Теперь вы можете задавать по ней вопросы."
 
 def create_word_document(content: str) -> str:
-    """Создает документ Word (.docx) с заданным текстом и возвращает путь к нему."""
     doc = WordDocument()
     doc.add_paragraph(content)
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
@@ -89,7 +83,6 @@ def create_word_document(content: str) -> str:
     return f"Документ Word успешно создан и доступен по пути: {temp_file.name}"
 
 def create_excel_document(content: str) -> str:
-    """Создает документ Excel (.xlsx) с заданными данными и возвращает путь к нему."""
     wb = ExcelWorkbook()
     ws = wb.active
     for line in content.split('\n'):
@@ -100,7 +93,6 @@ def create_excel_document(content: str) -> str:
     return f"Документ Excel успешно создан и доступен по пути: {temp_file.name}"
 
 def create_pdf_document(content: str) -> str:
-    """Создает документ PDF (.pdf) с заданным текстом и возвращает путь к нему."""
     pdf = FPDF()
     pdf.add_page()
     pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
@@ -205,7 +197,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"Произошла внутренняя ошибка.")
 
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает сообщения с фотографиями."""
     logger.info("Получено изображение.")
     await update.message.reply_text('Анализирую изображение...')
     try:
