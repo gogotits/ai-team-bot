@@ -7,10 +7,10 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import tempfile
 
+# Библиотеки для документов
 from docx import Document as WordDocument
-from openpyxl import Workbook as ExcelWorkbook
-from fpdf import FPDF
 
+# Основные компоненты LangChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from langchain.agents import AgentExecutor, create_tool_calling_agent, Tool
@@ -20,18 +20,18 @@ from langchain_tavily import TavilySearch
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-# УДАЛЯЕМ НЕНУЖНЫЙ ИМПОРТ
 
 # --- 2. Настройка ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 load_dotenv()
-if "GOOGLE_API_KEY" not in os.environ or "TELEGRAM_BOT_TOKEN" not in os.environ or "TAVILY_API_KEY" not in os.environ:
-    raise ValueError("Не найдены необходимые ключи API в .env файле!")
-print("✅ Ключи API загружены.")
+# Проверяем наличие всех необходимых ключей API
+if not all(key in os.environ for key in ["GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TAVILY_API_KEY"]):
+    raise ValueError("Один или несколько ключей API не найдены в .env файле!")
+print("✅ Все ключи API загружены.")
 
 # --- 3. Инициализация ИИ-компонентов ---
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7)
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.5)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 print("✅ LLM и модель эмбеддингов инициализированы.")
 
@@ -42,88 +42,116 @@ main_db = Chroma(persist_directory=persistent_storage_path, embedding_function=e
 retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
+# --- Функции-инструменты ---
+
+def retrieve_from_memory(query: str) -> str:
+    """Ищет ответ на запрос в долгосрочной памяти (базе знаний)."""
+    logger.info(f"Поиск в памяти по запросу: {query}")
+    docs = retriever.invoke(query)
+    if not docs:
+        return "В моей базе знаний нет информации по этому вопросу. Чтобы найти информацию, дайте команду, начинающуюся со слова 'исследуй'."
+    return "\n".join([doc.page_content for doc in docs])
+
+def research_and_learn(topic: str) -> str:
+    """Исследует тему в интернете, создает саммари и сохраняет его в долгосрочную память."""
+    logger.info(f"Начинаю исследование по теме: {topic}")
+    search = TavilySearch(max_results=3)
+    try:
+        search_results = search.invoke(topic)
+    except Exception as e:
+        logger.error(f"Ошибка при поиске в Tavily: {e}")
+        return "Произошла ошибка при доступе к поисковой системе."
+
+    if not search_results:
+        return "Не удалось найти информацию по данной теме в интернете."
+
+    raw_text = "\n\n".join([result for result in search_results])
+    
+    summarizer_prompt = f"""Проанализируй следующий текст, найденный по теме '{topic}'. 
+    Создай качественное, структурированное саммари на русском языке. 
+    Твой ответ должен содержать только саммари, без лишних фраз.
+    ТЕКСТ ДЛЯ АНАЛИЗА:\n{raw_text}"""
+    
+    summary = llm.invoke(summarizer_prompt).content
+    logger.info("Создано саммари найденной информации.")
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
+    
+    main_db.add_documents(texts)
+    logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
+    return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти. Теперь вы можете задавать по ней вопросы."
+
 def create_word_document(content: str) -> str:
+    """Создает документ Word (.docx) с заданным текстом и возвращает путь к нему."""
     doc = WordDocument()
     doc.add_paragraph(content)
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
     doc.save(temp_file.name)
-    return f"Документ Word успешно создан: {temp_file.name}"
+    logger.info(f"Создан Word документ: {temp_file.name}")
+    return f"Документ Word успешно создан и доступен по пути: {temp_file.name}"
 
-def retrieve_from_memory(query: str) -> str:
-    logger.info(f"Поиск в памяти по запросу: {query}")
-    docs = retriever.invoke(query)
-    if not docs:
-        return "В моей базе знаний нет информации по этому вопросу."
-    return "\n".join([doc.page_content for doc in docs])
-
-# --- 5. СОЗДАНИЕ СПЕЦИАЛИСТОВ (Вспомогательных Агентов) ---
-def create_specialist_agent(persona: str, specialist_tools: list) -> AgentExecutor:
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", persona),
-        ("human", "{input}"),
-        MessagesPlaceholder("agent_scratchpad"),
-    ])
-    agent = create_tool_calling_agent(llm, specialist_tools, prompt)
-    return AgentExecutor(agent=agent, tools=specialist_tools, verbose=True)
-
-historian_persona = "Ты — профессиональный историк. Твоя задача — предоставлять точные, подробные и объективные ответы на исторические вопросы, используя поиск в интернете."
-historian_agent = create_specialist_agent(historian_persona, [TavilySearch(max_results=5)])
-
-# --- 6. СОЗДАНИЕ ГЛАВНОГО АГЕНТА (Руководителя) ---
-print("Инициализация Главного Агента...")
-main_tools = [
+# --- 5. Создание ЕДИНОГО АГЕНТА И ЕГО ИНСТРУМЕНТОВ ---
+tools = [
     Tool(
-        name="HistoryExpert",
-        func=historian_agent.invoke,
-        description="Используй этот инструмент для любых вопросов, связанных с историей, историческими личностями, событиями и датами."
-    ),
-    Tool(
-        name="MemoryRetriever",
+        name="retrieve_from_memory",
         func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым, если вопрос касается ранее исследованных тем."
+        description="Используй, чтобы найти ответ на вопрос пользователя в своей долгосрочной памяти. Всегда пробуй этот инструмент первым."
     ),
     Tool(
-        name="CreateWordDocument",
+        name="research_and_learn",
+        func=research_and_learn,
+        description="Используй, чтобы исследовать новую тему в интернете и сохранить результаты в долгосрочную память. Используй этот инструмент, только если пользователь явно просит об этом, используя слова 'исследуй', 'найди', 'сохрани'."
+    ),
+    Tool(
+        name="create_word_document",
         func=create_word_document,
-        description="Используй для создания документа Word (.docx)."
+        description="Используй для создания документа Microsoft Word (.docx), когда пользователь явно просит об этом."
     ),
 ]
+print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-# УПРОЩАЕМ ПРОМПТ ДЛЯ СОВМЕСТИМОСТИ
-main_system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов.
-Сначала всегда проверяй свою память с помощью MemoryRetriever. Если там нет ответа, выбери другого подходящего эксперта."""
+system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, используя доступные инструменты.
 
-main_prompt = ChatPromptTemplate.from_messages([
-    ("system", main_system_prompt),
+ТВОЙ АЛГОРИТМ РАБОТЫ:
+1.  Для любого вопроса пользователя **всегда** сначала используй инструмент `retrieve_from_memory`, чтобы проверить, нет ли ответа в твоей базе знаний.
+2.  Если `retrieve_from_memory` нашел релевантную информацию, дай ответ на ее основе.
+3.  Если `retrieve_from_memory` вернул сообщение об отсутствии информации, а вопрос пользователя **не начинается** со слов "исследуй", "найди" или "сохрани", твой финальный ответ должен быть именно таким: "В моей базе знаний нет информации по этому вопросу. Чтобы найти информацию, дайте команду, начинающуюся со слова 'исследуй'."
+4.  Если вопрос пользователя **начинается** со слов "исследуй", "найди" или "сохрани", используй инструмент `research_and_learn`.
+5.  Инструмент `create_word_document` используй только тогда, когда пользователь прямо попросил "создай документ" или "сделай отчет в Word".
+"""
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", system_prompt),
     MessagesPlaceholder("chat_history"),
     ("human", "{input}"),
     MessagesPlaceholder("agent_scratchpad"),
 ])
 
-main_agent = create_tool_calling_agent(llm, main_tools, main_prompt)
+agent = create_tool_calling_agent(llm, tools, prompt)
 memory = ConversationBufferWindowMemory(k=8, memory_key="chat_history", return_messages=True)
-main_agent_executor = AgentExecutor(
-    agent=main_agent,
-    tools=main_tools,
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
     memory=memory,
     verbose=True,
     handle_parsing_errors=True
 )
-print("✅ Главный Агент (Руководитель) создан.")
+print("✅ Единый универсальный агент создан.")
 
-# --- 7. Функции-обработчики для Telegram ---
+# --- 6. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data['chat_history'] = []
-    await update.message.reply_text('Привет! Я ваш ИИ-ассистент с командой экспертов. О чем поговорим сегодня?')
+    await update.message.reply_text('Привет! Я ваш универсальный ИИ-ассистент. Я помню наш диалог. Задайте мне вопрос или дайте команду на исследование.')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
     logger.info(f"Получена задача: '{user_query}'")
-    await update.message.reply_text('Приступаю к выполнению задачи... Обращаюсь к команде экспертов.')
+    await update.message.reply_text('Приступаю к выполнению задачи...')
     
     try:
         chat_history = context.user_data.get('chat_history', [])
-        result = main_agent_executor.invoke({"input": user_query, "chat_history": chat_history})
+        result = agent_executor.invoke({"input": user_query, "chat_history": chat_history})
         
         context.user_data['chat_history'] = result['chat_history']
 
@@ -146,12 +174,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Ошибка при обработке текста: {e}", exc_info=True)
         await update.message.reply_text(f"Произошла внутренняя ошибка.")
 
-# --- 8. Основная функция запуска бота ---
+# --- 7. Основная функция запуска бота ---
 def main() -> None:
     application = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    print("🚀 Запускаю иерархического Telegram-бота...")
+    print("🚀 Запускаю Telegram-бота...")
     application.run_polling()
 
 if __name__ == '__main__':
