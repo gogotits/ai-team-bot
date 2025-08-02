@@ -36,115 +36,115 @@ llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.5)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 print("✅ LLM и модель эмбеддингов инициализированы.")
 
-# --- 4. ЕДИНАЯ БАЗА ЗНАНИЙ И ФУНКЦИИ-ИНСТРУМЕНТЫ ---
+# --- 4. ЕДИНАЯ БАЗА ЗНАНИЙ ---
 print("Инициализация единой базы знаний...")
 persistent_storage_path = "/var/data/main_chroma_db"
 main_db = Chroma(persist_directory=persistent_storage_path, embedding_function=embeddings)
 retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
-# --- Функции-инструменты ---
+# --- 5. СОЗДАНИЕ АГЕНТОВ-ЭКСПЕРТОВ (Вспомогательных) ---
+
+# 5.1 Эксперт: Исследователь (ищет и сохраняет)
+def research_and_learn(topic: str) -> str:
+    logger.info(f"Эксперт 'Researcher': Начинаю исследование по теме: {topic}")
+    search = TavilySearch(max_results=3)
+    try:
+        search_results = search.invoke(topic)
+        raw_text = "\n\n".join([result.get('content', '') for result in search_results])
+        summarizer_prompt = f"""Проанализируй текст по теме '{topic}'. Создай качественное саммари на русском языке. Ответ должен содержать только саммари."""
+        summary = llm.invoke(summarizer_prompt).content
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
+        main_db.add_documents(texts)
+        return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
+    except Exception as e:
+        return f"Ошибка в работе Исследователя: {e}"
+
+# 5.2 Эксперт: Помощник (быстрый поиск в интернете)
+quick_search_tool = TavilySearch(max_results=3)
+
+# 5.3 Эксперт: Архивариус (поиск в памяти)
 def retrieve_from_memory(query: str) -> str:
-    logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
+    logger.info(f"Эксперт 'Archivist': Поиск в памяти по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
         return "В моей базе знаний нет информации по этому вопросу."
     return "\n".join([doc.page_content for doc in docs])
 
-def research_and_learn(topic: str) -> str:
-    logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
-    search = TavilySearch(max_results=3)
+# 5.4 Эксперт: Секретарь (создание документов)
+def create_document(content: str, doc_type: str) -> str:
+    logger.info(f"Эксперт 'Secretary': Создаю документ типа {doc_type}")
     try:
-        search_results = search.invoke(topic)
+        if doc_type.lower() == 'word':
+            doc = WordDocument()
+            doc.add_paragraph(content)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
+            doc.save(temp_file.name)
+            return f"Документ Word успешно создан: {temp_file.name}"
+        # Можно добавить Excel и PDF по аналогии
+        else:
+            return "Неподдерживаемый тип документа."
     except Exception as e:
-        logger.error(f"Ошибка при поиске в Tavily: {e}")
-        return "Произошла ошибка при доступе к поисковой системе."
-    if not search_results:
-        return "Не удалось найти информацию по данной теме в интернете."
+        return f"Ошибка при создании документа: {e}"
+
+# 5.5 Эксперт: Аналитик (анализ и обновление знаний)
+def analyze_and_update_memory(query: str) -> str:
+    logger.info("Эксперт 'Analyst': Начинаю анализ базы знаний.")
+    all_docs = main_db.get(include=["metadatas"])
+    if not all_docs or not all_docs.get('metadatas'):
+        return "База знаний пуста. Нечего анализировать."
+    topics = list(set([meta['source'].replace("Research on ", "") for meta in all_docs['metadatas'] if 'source' in meta]))
+    if not topics:
+        return "В базе знаний нет тем для анализа."
     
-    raw_text = "\n\n".join([result.get('content', '') for result in search_results])
+    planner_prompt = f"""Вот список тем в моей базе знаний: {", ".join(topics)}. Какая из них наиболее вероятно могла устареть? Ответь только названием одной темы."""
+    topic_to_update = llm.invoke(planner_prompt).content.strip()
     
-    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{raw_text}"""
-    summary = llm.invoke(summarizer_prompt).content
-    logger.info("Создано саммари найденной информации.")
+    logger.info(f"Аналитик решил обновить тему: {topic_to_update}")
+    return research_and_learn(topic_to_update)
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
-    
-    main_db.add_documents(texts)
-    logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
-    return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
+# --- 6. СОЗДАНИЕ ГЛАВНОГО АГЕНТА (Руководителя) ---
+print("Инициализация Главного Агента и его команды...")
 
-def create_word_document(content: str) -> str:
-    doc = WordDocument()
-    doc.add_paragraph(content)
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
-    doc.save(temp_file.name)
-    logger.info(f"Создан Word документ: {temp_file.name}")
-    return f"Документ Word успешно создан и доступен по пути: {temp_file.name}"
-
-def create_excel_document(content: str) -> str:
-    wb = ExcelWorkbook()
-    ws = wb.active
-    for line in content.split('\n'):
-        ws.append(line.split(','))
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
-    wb.save(temp_file.name)
-    logger.info(f"Создан Excel документ: {temp_file.name}")
-    return f"Документ Excel успешно создан и доступен по пути: {temp_file.name}"
-
-def create_pdf_document(content: str) -> str:
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
-    pdf.set_font('DejaVu', '', 12)
-    pdf.multi_cell(0, 10, content)
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
-    pdf.output(temp_file.name)
-    logger.info(f"Создан PDF документ: {temp_file.name}")
-    return f"PDF документ успешно создан и доступен по пути: {temp_file.name}"
-
-# --- 5. Создание ЕДИНОГО АГЕНТА И ЕГО ИНСТРУМЕНТОВ ---
-tools = [
+main_tools = [
     Tool(
-        name="retrieve_from_memory",
-        func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти (по ранее исследованным темам)."
+        name="QuickInternetSearch",
+        func=quick_search_tool.invoke,
+        description="Используй для быстрых, фактических вопросов о мире (погода, новости, столицы и т.д.), которые не нужно сохранять."
     ),
     Tool(
-        name="internet_search",
-        func=TavilySearch(max_results=3).invoke,
-        description="Используй для поиска в интернете актуальной информации о мире, новостях, погоде и фактах, если ответа нет в памяти."
-    ),
-    Tool(
-        name="research_and_learn",
+        name="DeepResearcher",
         func=research_and_learn,
-        description="Используй, когда пользователь прямо просит 'исследуй' или 'найди и сохрани', чтобы найти обширную информацию и сохранить ее в долгосрочную память."
+        description="Используй, когда пользователь прямо просит 'исследуй', 'найди и сохрани', чтобы найти и сохранить в память обширную информацию."
     ),
     Tool(
-        name="create_word_document",
-        func=create_word_document,
-        description="Используй для создания документа Microsoft Word (.docx)."
+        name="MemoryArchivist",
+        func=retrieve_from_memory,
+        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым для вопросов о ранее исследованных темах."
     ),
     Tool(
-        name="create_excel_document",
-        func=create_excel_document,
-        description="Используй для создания документа Microsoft Excel (.xlsx)."
+        name="KnowledgeAnalyst",
+        func=analyze_and_update_memory,
+        description="Используй, когда пользователь просит 'актуализируй знания' или 'обнови информацию'."
     ),
     Tool(
-        name="create_pdf_document",
-        func=create_pdf_document,
-        description="Используй для создания PDF документа (.pdf)."
+        name="Secretary",
+        func=lambda input_str: create_document(content=input_str.split('|')[0], doc_type=input_str.split('|')[1]),
+        description="Используй для создания документов. Входные данные должны быть строкой в формате 'текст для документа|тип документа' (например, 'Привет, мир|word')."
     ),
 ]
-print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-# ФИНАЛЬНЫЙ, ГИБКИЙ И ПРОСТОЙ ПРОМПТ
-system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, отвечая на его вопросы и выполняя задачи.
-У тебя есть доступ к набору инструментов. Ты должен сам, на основе вопроса пользователя и истории диалога, решать, какой инструмент использовать, чтобы наилучшим образом помочь.
-Всегда старайся сначала проверить свою память (`retrieve_from_memory`), прежде чем искать в интернете.
-Если пользователь просит создать документ, сначала найди информацию, а потом предложи создать документ с этой информацией.
-Всегда отвечай на языке пользователя.
+system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
+
+Твоя команда:
+- `QuickInternetSearch`: Для быстрых фактов (погода, новости).
+- `DeepResearcher`: Для глубокого исследования и сохранения знаний по команде "исследуй".
+- `MemoryArchivist`: Для поиска в твоей базе знаний. Используй его первым для вопросов по исследованным темам.
+- `KnowledgeAnalyst`: Для анализа и обновления базы знаний по команде "обнови".
+- `Secretary`: Для создания документов по команде "создай документ".
+
+Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -154,26 +154,26 @@ prompt = ChatPromptTemplate.from_messages([
     MessagesPlaceholder("agent_scratchpad"),
 ])
 
-agent = create_tool_calling_agent(llm, tools, prompt)
-memory = ConversationBufferWindowMemory(k=8, memory_key="chat_history", return_messages=True)
+agent = create_tool_calling_agent(llm, main_tools, prompt)
+memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
 agent_executor = AgentExecutor(
     agent=agent,
-    tools=tools,
+    tools=main_tools,
     memory=memory,
     verbose=True,
     handle_parsing_errors=True
 )
-print("✅ Единый универсальный агент создан.")
+print("✅ Главный Агент (Руководитель) и его команда готовы к работе.")
 
-# --- 6. Функции-обработчики для Telegram ---
+# --- 7. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data['chat_history'] = []
-    await update.message.reply_text('Привет! Я ваш универсальный ИИ-ассистент. Я помню наш диалог. Задайте мне вопрос.')
+    await update.message.reply_text('Привет! Я ваш ИИ-ассистент с командой экспертов. О чем поговорим сегодня?')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
     logger.info(f"Получена задача: '{user_query}'")
-    await update.message.reply_text('Приступаю к выполнению задачи...')
+    await update.message.reply_text('Приступаю к выполнению задачи... Обращаюсь к команде экспертов.')
     
     try:
         chat_history = context.user_data.get('chat_history', [])
@@ -182,14 +182,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['chat_history'] = result['chat_history']
 
         response_text = result["output"]
-        if response_text.startswith("Документ") and ('.docx' in response_text or '.xlsx' in response_text or '.pdf' in response_text):
+        if response_text.startswith("Документ") and '.docx' in response_text:
             try:
                 file_path = response_text.split(":")[-1].strip()
                 if os.path.exists(file_path):
                     await context.bot.send_document(chat_id=update.effective_chat.id, document=open(file_path, 'rb'))
                     os.remove(file_path)
-                else:
-                    await update.message.reply_text("Не удалось найти созданный файл для отправки.")
             except Exception as e:
                 logger.error(f"Ошибка при отправке документа: {e}", exc_info=True)
                 await update.message.reply_text(f"Не удалось отправить документ.")
@@ -210,26 +208,20 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         base64_image = base64.b64encode(photo_bytes).decode("utf-8")
         
-        message_payload = HumanMessage(
-            content=[
-                {"type": "text", "text": user_caption},
-                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_image}"},
-            ]
-        )
+        message_payload = HumanMessage(content=[{"type": "text", "text": user_caption}, {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_image}"},])
         response = llm.invoke([message_payload])
         await update.message.reply_text(response.content)
-        logger.info("Отправлен ответ на изображение.")
     except Exception as e:
         logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
         await update.message.reply_text(f"Не удалось обработать изображение.")
 
-# --- 7. Основная функция запуска бота ---
+# --- 8. Основная функция запуска бота ---
 def main() -> None:
     application = Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
-    print("🚀 Запускаю Telegram-бота...")
+    print("🚀 Запускаю иерархического Telegram-бота...")
     application.run_polling()
 
 if __name__ == '__main__':
