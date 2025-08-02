@@ -90,7 +90,7 @@ def research_and_learn(topic: str) -> str:
     summary = llm.invoke(summarizer_prompt).content
     logger.info("Создано саммари найденной информации.")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    texts = text_splitter.create_documents([summary], metatas=[{"source": f"Research on {topic}"}])
+    texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
     archivist_db.add_documents(texts)
     logger.info(f"Саммари по теме '{topic}' успешно добавлено в базу знаний Архивариуса.")
     return f"Информация по теме '{topic}' была успешно исследована, проанализирована и сохранена в моей памяти."
