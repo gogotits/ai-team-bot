@@ -11,7 +11,8 @@ from docx import Document as WordDocument
 from openpyxl import Workbook as ExcelWorkbook
 from fpdf import FPDF
 
-from langchain_google_genai import ChatGoogleGenAI
+# ИСПРАВЛЕНИЕ: Правильное имя класса
+from langchain_google_genai import ChatGoogleGenerativeAI 
 from langchain_core.messages import HumanMessage
 from langchain.prompts import ChatPromptTemplate
 from langchain.agents import AgentExecutor, create_react_agent, Tool
@@ -21,7 +22,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain, RetrievalQA # <-- ВОЗВРАЩАЕМ ЭТОТ ИМПОРТ
+from langchain.chains import create_retrieval_chain, RetrievalQA
 
 # --- 2. Настройка ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -32,6 +33,7 @@ if "GOOGLE_API_KEY" not in os.environ or "TELEGRAM_BOT_TOKEN" not in os.environ 
 print("✅ Ключи API загружены.")
 
 # --- 3. Инициализация ИИ-компонентов ---
+# ИСПРАВЛЕНИЕ: Правильное имя класса
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 print("✅ LLM и модель эмбеддингов инициализированы.")
@@ -88,7 +90,7 @@ def research_and_learn(topic: str) -> str:
     summary = llm.invoke(summarizer_prompt).content
     logger.info("Создано саммари найденной информации.")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
+    texts = text_splitter.create_documents([summary], metatas=[{"source": f"Research on {topic}"}])
     archivist_db.add_documents(texts)
     logger.info(f"Саммари по теме '{topic}' успешно добавлено в базу знаний Архивариуса.")
     return f"Информация по теме '{topic}' была успешно исследована, проанализирована и сохранена в моей памяти."
