@@ -9,6 +9,8 @@ import tempfile
 
 # Библиотеки для документов
 from docx import Document as WordDocument
+from openpyxl import Workbook as ExcelWorkbook
+from fpdf import FPDF
 
 # Основные компоненты LangChain
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -42,6 +44,13 @@ retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
 # --- Функции-инструменты ---
+def retrieve_from_memory(query: str) -> str:
+    logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
+    docs = retriever.invoke(query)
+    if not docs:
+        return "В моей базе знаний нет информации по этому вопросу."
+    return "\n".join([doc.page_content for doc in docs])
+
 def research_and_learn(topic: str) -> str:
     logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
     search = TavilySearch(max_results=3)
@@ -66,38 +75,6 @@ def research_and_learn(topic: str) -> str:
     logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
     return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
 
-def answer_question_tool(query: str) -> str:
-    """Универсальный инструмент для ответа на вопросы. Сначала ищет в памяти, потом в интернете."""
-    logger.info(f"Универсальный инструмент: Поиск ответа на вопрос: {query}")
-    # Шаг 1: Поиск в памяти
-    memory_docs = retriever.invoke(query)
-    memory_context = "\n".join([doc.page_content for doc in memory_docs])
-    
-    # Шаг 2: Создаем промпт для LLM, чтобы она решила, достаточно ли информации
-    decision_prompt = f"""Проанализируй следующий вопрос пользователя и найденную в моей памяти информацию.
-    Вопрос: "{query}"
-    Найденная информация: "{memory_context}"
-
-    Если найденная информация полностью и исчерпывающе отвечает на вопрос, скажи только "ДОСТАТОЧНО".
-    В противном случае, скажи только "ИСКАТЬ В ИНТЕРНЕТЕ"."""
-
-    decision = llm.invoke(decision_prompt).content
-    
-    if "ДОСТАТОЧНО" in decision:
-        logger.info("Принято решение: информации в памяти достаточно.")
-        return memory_context
-    else:
-        logger.info("Принято решение: нужно искать в интернете.")
-        search = TavilySearch(max_results=3)
-        try:
-            search_results = search.invoke(query)
-            if not search_results:
-                return "Не удалось найти информацию в интернете."
-            internet_context = "\n\n".join([res.get('content', '') for res in search_results])
-            return internet_context
-        except Exception as e:
-            return f"Произошла ошибка при поиске в интернете: {e}"
-
 def create_word_document(content: str) -> str:
     doc = WordDocument()
     doc.add_paragraph(content)
@@ -106,34 +83,68 @@ def create_word_document(content: str) -> str:
     logger.info(f"Создан Word документ: {temp_file.name}")
     return f"Документ Word успешно создан и доступен по пути: {temp_file.name}"
 
+def create_excel_document(content: str) -> str:
+    wb = ExcelWorkbook()
+    ws = wb.active
+    for line in content.split('\n'):
+        ws.append(line.split(','))
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
+    wb.save(temp_file.name)
+    logger.info(f"Создан Excel документ: {temp_file.name}")
+    return f"Документ Excel успешно создан и доступен по пути: {temp_file.name}"
+
+def create_pdf_document(content: str) -> str:
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+    pdf.set_font('DejaVu', '', 12)
+    pdf.multi_cell(0, 10, content)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
+    pdf.output(temp_file.name)
+    logger.info(f"Создан PDF документ: {temp_file.name}")
+    return f"PDF документ успешно создан и доступен по пути: {temp_file.name}"
+
 # --- 5. Создание ЕДИНОГО АГЕНТА И ЕГО ИНСТРУМЕНТОВ ---
 tools = [
     Tool(
-        name="answer_question",
-        func=answer_question_tool,
-        description="Используй этот универсальный инструмент для ответа на ЛЮБОЙ вопрос пользователя (например, о погоде, фактах, или по ранее исследованным темам)."
+        name="retrieve_from_memory",
+        func=retrieve_from_memory,
+        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти (по ранее исследованным темам)."
+    ),
+    Tool(
+        name="internet_search",
+        func=TavilySearch(max_results=3).invoke,
+        description="Используй для поиска в интернете актуальной информации о мире, новостях, погоде и фактах, если ответа нет в памяти."
     ),
     Tool(
         name="research_and_learn",
         func=research_and_learn,
-        description="Используй этот инструмент, только когда пользователь прямо просит 'исследуй' или 'найди и сохрани', чтобы найти и сохранить в память обширную информацию."
+        description="Используй, когда пользователь прямо просит 'исследуй' или 'найди и сохрани', чтобы найти обширную информацию и сохранить ее в долгосрочную память."
     ),
     Tool(
         name="create_word_document",
         func=create_word_document,
-        description="Используй для создания документа Microsoft Word (.docx), когда пользователь просит об этом."
+        description="Используй для создания документа Microsoft Word (.docx)."
+    ),
+    Tool(
+        name="create_excel_document",
+        func=create_excel_document,
+        description="Используй для создания документа Microsoft Excel (.xlsx)."
+    ),
+    Tool(
+        name="create_pdf_document",
+        func=create_pdf_document,
+        description="Используй для создания PDF документа (.pdf)."
     ),
 ]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя главная задача — помогать пользователю.
-У тебя есть инструменты. Ты должен сам решать, какой инструмент лучше всего подходит.
-
-Твои принципы:
-- Для ответа на любой обычный вопрос используй `answer_question`.
-- Для больших исследовательских задач по команде 'исследуй' используй `research_and_learn`.
-- Для создания файлов используй `create_word_document`.
-- Всегда будь вежлив и старайся помочь.
+# ФИНАЛЬНЫЙ, ГИБКИЙ И ПРОСТОЙ ПРОМПТ
+system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, отвечая на его вопросы и выполняя задачи.
+У тебя есть доступ к набору инструментов. Ты должен сам, на основе вопроса пользователя и истории диалога, решать, какой инструмент использовать, чтобы наилучшим образом помочь.
+Всегда старайся сначала проверить свою память (`retrieve_from_memory`), прежде чем искать в интернете.
+Если пользователь просит создать документ, сначала найди информацию, а потом предложи создать документ с этой информацией.
+Всегда отвечай на языке пользователя.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -171,7 +182,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['chat_history'] = result['chat_history']
 
         response_text = result["output"]
-        if response_text.startswith("Документ") and '.docx' in response_text:
+        if response_text.startswith("Документ") and ('.docx' in response_text or '.xlsx' in response_text or '.pdf' in response_text):
             try:
                 file_path = response_text.split(":")[-1].strip()
                 if os.path.exists(file_path):
@@ -199,9 +210,15 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         base64_image = base64.b64encode(photo_bytes).decode("utf-8")
         
-        message_payload = HumanMessage(content=[{"type": "text", "text": user_caption}, {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_image}"},])
+        message_payload = HumanMessage(
+            content=[
+                {"type": "text", "text": user_caption},
+                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_image}"},
+            ]
+        )
         response = llm.invoke([message_payload])
         await update.message.reply_text(response.content)
+        logger.info("Отправлен ответ на изображение.")
     except Exception as e:
         logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
         await update.message.reply_text(f"Не удалось обработать изображение.")
