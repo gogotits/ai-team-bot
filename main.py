@@ -84,17 +84,16 @@ def research_and_learn(topic: str) -> str:
     """Ищет информацию в интернете по теме, анализирует ее и добавляет в базу знаний Архивариуса."""
     logger.info(f"Начинаю исследование по теме: {topic}")
     search = TavilySearch()
-    # Устанавливаем include_raw_content=True, чтобы получить полные тексты
-    search_results = search.invoke({"query": topic, "include_raw_content": True})
+    search_results = search.invoke(topic) # This returns a list of strings
     
     if not search_results:
         return "Не удалось найти информацию по данной теме."
 
     # Собираем весь найденный контент в один большой текст
     full_text = f"Отчет по теме: {topic}\n\n"
-    # Теперь search_results - это список словарей, как и ожидалось
+    # Теперь обрабатываем каждый 'result' как строку
     for result in search_results:
-        full_text += result.get("content", "") + "\n\n"
+        full_text += result + "\n\n"
         
     # Разбиваем текст на чанки и добавляем в базу Архивариуса
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
@@ -103,7 +102,7 @@ def research_and_learn(topic: str) -> str:
     
     logger.info(f"Информация по теме '{topic}' успешно найдена и добавлена в базу знаний Архивариуса.")
     return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
-    
+
 # --- 5. Определение Инструментов ---
 archivist_chain = RetrievalQA.from_chain_type(llm, retriever=archivist_db.as_retriever())
 analyst_chain = RetrievalQA.from_chain_type(llm, retriever=analyst_db.as_retriever())
