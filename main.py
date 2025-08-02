@@ -48,7 +48,7 @@ def retrieve_from_memory(query: str) -> str:
     logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
-        return "В моей базе знаний нет информации по этому вопросу. Чтобы найти информацию, дайте команду, начинающуюся со слова 'исследуй'."
+        return "В моей базе знаний нет информации по этому вопросу."
     return "\n".join([doc.page_content for doc in docs])
 
 def research_and_learn(topic: str) -> str:
@@ -62,17 +62,16 @@ def research_and_learn(topic: str) -> str:
     if not search_results:
         return "Не удалось найти информацию по данной теме в интернете."
     
-    # ИСПРАВЛЕНИЕ: Обрабатываем search_results как список простых строк
     raw_text = "\n\n".join(search_results)
     
-    summarizer_prompt = f"""Проанализируй следующий текст, найденный по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари, без лишних фраз. ТЕКСТ ДЛЯ АНАЛИЗА:\n{raw_text}"""
+    summarizer_prompt = f"""Проанализируй следующий текст, найденный по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{raw_text}"""
     summary = llm.invoke(summarizer_prompt).content
     logger.info("Создано саммари найденной информации.")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
     main_db.add_documents(texts)
     logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
-    return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти. Теперь вы можете задавать по ней вопросы."
+    return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
 
 def create_word_document(content: str) -> str:
     doc = WordDocument()
@@ -108,39 +107,39 @@ tools = [
     Tool(
         name="retrieve_from_memory",
         func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос пользователя в своей долгосрочной памяти. Всегда пробуй этот инструмент первым."
+        description="Используй, чтобы найти ответ на вопрос в долгосрочной памяти. Это твой основной источник знаний об исследованных ранее темах."
     ),
     Tool(
-        name="research_and_learn",
+        name="internet_search_and_save",
         func=research_and_learn,
-        description="Используй, чтобы исследовать новую тему в интернете и сохранить результаты в долгосрочную память. Используй этот инструмент, только если пользователь явно просит об этом, используя слова 'исследуй', 'найди', 'сохрани'."
+        description="Используй для поиска НОВОЙ информации в интернете и ее сохранения. Применяй, если в памяти ничего не нашлось или если пользователь прямо просит 'исследуй', 'найди'."
     ),
     Tool(
         name="create_word_document",
         func=create_word_document,
-        description="Используй для создания документа Microsoft Word (.docx), когда пользователь явно просит об этом."
+        description="Используй для создания документа Microsoft Word (.docx)."
     ),
     Tool(
         name="create_excel_document",
         func=create_excel_document,
-        description="Используй для создания документа Microsoft Excel (.xlsx). Входные данные: строка, где ячейки разделены запятыми, а строки - переносом строки."
+        description="Используй для создания документа Microsoft Excel (.xlsx)."
     ),
     Tool(
         name="create_pdf_document",
         func=create_pdf_document,
-        description="Используй для создания PDF документа (.pdf), когда пользователь явно просит об этом."
+        description="Используй для создания PDF документа (.pdf)."
     ),
 ]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
+# УПРОЩЕННЫЙ И БОЛЕЕ НАДЕЖНЫЙ ПРОМПТ
 system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, используя доступные инструменты.
 
 ТВОЙ АЛГОРИТМ РАБОТЫ:
-1.  Для любого вопроса пользователя **всегда** сначала используй инструмент `retrieve_from_memory`, чтобы проверить, нет ли ответа в твоей базе знаний.
-2.  Если `retrieve_from_memory` нашел релевантную информацию, дай ответ на ее основе.
-3.  Если `retrieve_from_memory` вернул сообщение об отсутствии информации, а вопрос пользователя **не начинается** со слов "исследуй", "найди" или "сохрани", твой финальный ответ должен быть именно таким: "В моей базе знаний нет информации по этому вопросу. Чтобы найти информацию, дайте команду, начинающуюся со слова 'исследуй'."
-4.  Если вопрос пользователя **начинается** со слов "исследуй", "найди" или "сохрани", используй инструмент `research_and_learn`.
-5.  Инструменты для создания документов используй только тогда, когда пользователь прямо попросил "создай документ" или "сделай отчет в Word/PDF/Excel".
+1.  Для ответа на вопрос **всегда** сначала используй `retrieve_from_memory`.
+2.  Если в памяти пусто, и вопрос требует знаний о мире, используй `internet_search_and_save`.
+3.  Инструменты для создания документов используй **только** когда пользователь прямо просит об этом.
+4.  Никогда не выдумывай информацию. Если не знаешь ответа и не можешь его найти, честно скажи об этом.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -164,7 +163,7 @@ print("✅ Единый универсальный агент создан.")
 # --- 6. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data['chat_history'] = []
-    await update.message.reply_text('Привет! Я ваш универсальный ИИ-ассистент. Я помню наш диалог. Задайте мне вопрос или дайте команду на исследование.')
+    await update.message.reply_text('Привет! Я ваш универсальный ИИ-ассистент. Я помню наш диалог. Задайте мне вопрос.')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
