@@ -44,7 +44,9 @@ retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
 # --- Функции-инструменты ---
+
 def retrieve_from_memory(query: str) -> str:
+    """Ищет ответ на запрос в долгосрочной памяти (базе знаний)."""
     logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
@@ -52,31 +54,37 @@ def retrieve_from_memory(query: str) -> str:
     return "\n".join([doc.page_content for doc in docs])
 
 def research_and_learn(topic: str) -> str:
+    """Исследует тему в интернете, создает саммари и сохраняет его в долгосрочную память."""
     logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
-    search = TavilySearch(max_results=5)
-    try:
-        # ИСПРАВЛЕНИЕ: Правильно обрабатываем сложный ответ от Tavily
-        response_dict = search.invoke(topic)
-        search_results = response_dict.get("results", [])
-    except Exception as e:
-        logger.error(f"Ошибка при поиске в Tavily: {e}")
-        return "Произошла ошибка при доступе к поисковой системе."
-        
-    if not search_results:
-        return "Не удалось найти информацию по данной теме в интернете."
     
-    # Теперь мы уверены, что search_results - это список словарей
-    raw_text = "\n\n".join([result.get('content', '') for result in search_results])
-    
-    summarizer_prompt = f"""Проанализируй следующий текст, найденный по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{raw_text}"""
+    planner_prompt = f"""Мне нужно провести исследование на тему '{topic}'. Создай список из 3-4 ключевых подтем для поиска. Ответь только списком."""
+    sub_topics_str = llm.invoke(planner_prompt).content
+    sub_topics = [line.strip('- ').strip() for line in sub_topics_str.split('\n') if line.strip()]
+    logger.info(f"План исследования: {sub_topics}")
+
+    search = TavilySearch(max_results=2)
+    full_raw_text = ""
+    for sub_topic in sub_topics:
+        logger.info(f"Ищу информацию по подтеме: {sub_topic}")
+        try:
+            search_results = search.invoke(f"{sub_topic} ({topic})")
+            full_raw_text += f"### Информация по '{sub_topic}':\n" + "\n\n".join([res.get('content', '') for res in search_results]) + "\n\n"
+        except Exception as e:
+            logger.error(f"Ошибка при поиске по подтеме '{sub_topic}': {e}")
+            continue
+
+    if not full_raw_text.strip():
+        return "Не удалось найти информацию по теме в интернете."
+
+    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'. Создай единое, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{full_raw_text}"""
     summary = llm.invoke(summarizer_prompt).content
-    logger.info("Создано саммари найденной информации.")
+    logger.info("Создано финальное саммари.")
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
-    
     main_db.add_documents(texts)
-    logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
+    
+    logger.info(f"Саммари по теме '{topic}' успешно добавлено в базу знаний.")
     return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
 
 def create_word_document(content: str) -> str:
@@ -84,29 +92,43 @@ def create_word_document(content: str) -> str:
     doc.add_paragraph(content)
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
     doc.save(temp_file.name)
-    logger.info(f"Создан Word документ: {temp_file.name}")
     return f"Документ Word успешно создан и доступен по пути: {temp_file.name}"
 
-def create_excel_document(content: str) -> str:
-    wb = ExcelWorkbook()
-    ws = wb.active
-    for line in content.split('\n'):
-        ws.append(line.split(','))
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
-    wb.save(temp_file.name)
-    logger.info(f"Создан Excel документ: {temp_file.name}")
-    return f"Документ Excel успешно создан и доступен по пути: {temp_file.name}"
+def quick_internet_search(query: str) -> str:
+    """Для быстрых вопросов, не требующих сохранения в память."""
+    logger.info(f"Инструмент 'quick_internet_search': Поиск по запросу: {query}")
+    search = TavilySearch(max_results=3)
+    try:
+        results = search.invoke(query)
+        return "\n\n".join([res.get('content', '') for res in results])
+    except Exception as e:
+        return f"Произошла ошибка при поиске: {e}"
 
-def create_pdf_document(content: str) -> str:
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
-    pdf.set_font('DejaVu', '', 12)
-    pdf.multi_cell(0, 10, content)
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
-    pdf.output(temp_file.name)
-    logger.info(f"Создан PDF документ: {temp_file.name}")
-    return f"PDF документ успешно создан и доступен по пути: {temp_file.name}"
+def analyze_and_update_memory(query: str) -> str:
+    """Анализирует базу знаний и обновляет устаревшую информацию."""
+    logger.info("Инструмент 'analyze_and_update_memory': Начинаю анализ базы знаний.")
+    # Получаем все документы из базы
+    all_docs = main_db.get(include=["metadatas"])
+    if not all_docs or not all_docs.get('metadatas'):
+        return "База знаний пуста. Нечего анализировать."
+
+    # Извлекаем уникальные темы из метаданных
+    topics = list(set([meta['source'].replace("Research on ", "") for meta in all_docs['metadatas'] if 'source' in meta]))
+    if not topics:
+        return "В базе знаний нет тем для анализа."
+
+    logger.info(f"Найдены темы для анализа: {topics}")
+    
+    # Просим LLM выбрать одну, наиболее нуждающуюся в обновлении тему
+    planner_prompt = f"""Вот список тем, которые хранятся в моей базе знаний: {", ".join(topics)}.
+    Какая из этих тем, по-твоему, наиболее вероятно могла устареть (например, технологии, политика, наука)?
+    Ответь только названием одной темы."""
+    topic_to_update = llm.invoke(planner_prompt).content.strip()
+    
+    logger.info(f"Аналитик решил обновить тему: {topic_to_update}")
+    
+    # Запускаем исследование по этой теме
+    return research_and_learn(topic_to_update)
 
 # --- 5. Создание ЕДИНОГО АГЕНТА И ЕГО ИНСТРУМЕНТОВ ---
 tools = [
@@ -116,33 +138,35 @@ tools = [
         description="Используй, чтобы найти ответ на вопрос в долгосрочной памяти. Это твой основной источник знаний об исследованных ранее темах."
     ),
     Tool(
-        name="internet_search_and_learn",
+        name="quick_internet_search",
+        func=quick_internet_search,
+        description="Используй для быстрых вопросов о текущих событиях, погоде, новостях, которые не нужно сохранять в память."
+    ),
+    Tool(
+        name="research_and_learn",
         func=research_and_learn,
-        description="Используй для поиска НОВОЙ информации в интернете и ее сохранения. Применяй, если в памяти ничего не нашлось или если пользователь прямо просит 'исследуй', 'найди'."
+        description="Используй для глубокого исследования НОВОЙ, обширной темы и сохранения результатов в память. Применяй, если пользователь прямо просит 'исследуй', 'найди'."
+    ),
+    Tool(
+        name="analyze_and_update_memory",
+        func=analyze_and_update_memory,
+        description="Используй, когда пользователь просит 'актуализируй знания' или 'обнови информацию'. Этот инструмент сам выберет, какую тему обновить."
     ),
     Tool(
         name="create_word_document",
         func=create_word_document,
         description="Используй для создания документа Microsoft Word (.docx)."
     ),
-    Tool(
-        name="create_excel_document",
-        func=create_excel_document,
-        description="Используй для создания документа Microsoft Excel (.xlsx)."
-    ),
-    Tool(
-        name="create_pdf_document",
-        func=create_pdf_document,
-        description="Используй для создания PDF документа (.pdf)."
-    ),
 ]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, комплексно отвечая на его вопросы и выполняя задачи.
+system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, комплексно отвечая на его вопросы и выполняя задачи, используя доступные инструменты.
 
 Твои основные принципы:
 - **Память в первую очередь:** Для ответа на вопрос всегда сначала проверяй свою долгосрочную память с помощью `retrieve_from_memory`.
-- **Исследование, если нужно:** Если в памяти пусто, а вопрос требует знаний о мире, используй `internet_search_and_learn`.
+- **Быстрый поиск для фактов:** Если в памяти пусто, а вопрос требует быстрого ответа о текущих событиях (погода, новости), используй `quick_internet_search`.
+- **Глубокое исследование по команде:** Если пользователь прямо просит 'исследуй' или 'сохрани', используй `research_and_learn`.
+- **Анализ по команде:** Если пользователь просит 'обнови' или 'актуализируй', используй `analyze_and_update_memory`.
 - **Инструменты по запросу:** Инструменты для создания документов используй только тогда, когда пользователь прямо об этом просит.
 - **Честность:** Если не можешь найти информацию, честно скажи об этом.
 - **Контекст:** Всегда учитывай предыдущие сообщения в диалоге.
@@ -183,7 +207,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['chat_history'] = result['chat_history']
 
         response_text = result["output"]
-        if response_text.startswith("Документ") and ('.docx' in response_text or '.xlsx' in response_text or '.pdf' in response_text):
+        if response_text.startswith("Документ") and '.docx' in response_text:
             try:
                 file_path = response_text.split(":")[-1].strip()
                 if os.path.exists(file_path):
