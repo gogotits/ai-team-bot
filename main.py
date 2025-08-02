@@ -44,6 +44,7 @@ retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
 # --- Функции-инструменты ---
+
 def retrieve_from_memory(query: str) -> str:
     logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
     docs = retriever.invoke(query)
@@ -53,25 +54,51 @@ def retrieve_from_memory(query: str) -> str:
 
 def research_and_learn(topic: str) -> str:
     logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
-    search = TavilySearch(max_results=3)
-    try:
-        search_results = search.invoke(topic)
-    except Exception as e:
-        logger.error(f"Ошибка при поиске в Tavily: {e}")
-        return "Произошла ошибка при доступе к поисковой системе."
-    if not search_results:
+    
+    # Шаг 1: Создаем план исследования с помощью LLM
+    planner_prompt = f"""Мне нужно провести исследование на тему '{topic}'. 
+    Создай список из 3-4 ключевых подтем для поиска в интернете, чтобы полностью раскрыть эту тему.
+    Ответь только списком, где каждый пункт начинается с новой строки. Например:
+    - Биография
+    - Ключевые достижения
+    - Влияние на современников"""
+    
+    sub_topics_str = llm.invoke(planner_prompt).content
+    sub_topics = [line.strip('- ').strip() for line in sub_topics_str.split('\n') if line.strip()]
+    logger.info(f"План исследования по теме '{topic}': {sub_topics}")
+
+    # Шаг 2: Ищем информацию по каждой подтеме
+    search = TavilySearch(max_results=2)
+    full_raw_text = ""
+    for sub_topic in sub_topics:
+        logger.info(f"Ищу информацию по подтеме: {sub_topic}")
+        try:
+            search_results = search.invoke(f"{sub_topic} ({topic})") # Уточняем запрос
+            full_raw_text += f"### Информация по '{sub_topic}':\n"
+            full_raw_text += "\n\n".join([res.get('content', '') for res in search_results]) + "\n\n"
+        except Exception as e:
+            logger.error(f"Ошибка при поиске по подтеме '{sub_topic}': {e}")
+            continue
+
+    if not full_raw_text.strip():
         return "Не удалось найти информацию по данной теме в интернете."
+
+    # Шаг 3: Создаем финальное саммари из всей найденной информации
+    summarizer_prompt = f"""Проанализируй следующий текст, найденный в интернете по теме '{topic}'.
+    Текст разбит на разделы по подтемам. Твоя задача — создать единое, качественное и структурированное саммари на русском языке.
+    Твой ответ должен содержать только саммари, без лишних фраз.
+    ТЕКСТ ДЛЯ АНАЛИЗА:\n{full_raw_text}"""
     
-    raw_text = "\n\n".join(search_results)
-    
-    summarizer_prompt = f"""Проанализируй следующий текст, найденный по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{raw_text}"""
     summary = llm.invoke(summarizer_prompt).content
-    logger.info("Создано саммари найденной информации.")
+    logger.info("Создано финальное саммари найденной информации.")
+
+    # Шаг 4: Сохраняем саммари в базу знаний
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
     main_db.add_documents(texts)
+    
     logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
-    return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
+    return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти. Теперь вы можете задавать по ней вопросы."
 
 def create_word_document(content: str) -> str:
     doc = WordDocument()
@@ -110,9 +137,9 @@ tools = [
         description="Используй, чтобы найти ответ на вопрос в долгосрочной памяти. Это твой основной источник знаний об исследованных ранее темах."
     ),
     Tool(
-        name="internet_search_and_save",
+        name="research_and_learn",
         func=research_and_learn,
-        description="Используй для поиска НОВОЙ информации в интернете и ее сохранения. Применяй, если в памяти ничего не нашлось или если пользователь прямо просит 'исследуй', 'найди'."
+        description="Используй для исследования НОВОЙ, обширной темы в интернете и сохранения результатов в память. Применяй, если в памяти ничего не нашлось или если пользователь прямо просит 'исследуй', 'найди'."
     ),
     Tool(
         name="create_word_document",
@@ -132,14 +159,15 @@ tools = [
 ]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-# УПРОЩЕННЫЙ И БОЛЕЕ НАДЕЖНЫЙ ПРОМПТ
-system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, используя доступные инструменты.
+# ФИНАЛЬНЫЙ, ГИБКИЙ ПРОМПТ
+system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, комплексно отвечая на его вопросы и выполняя задачи, используя доступные инструменты.
 
-ТВОЙ АЛГОРИТМ РАБОТЫ:
-1.  Для ответа на вопрос **всегда** сначала используй `retrieve_from_memory`.
-2.  Если в памяти пусто, и вопрос требует знаний о мире, используй `internet_search_and_save`.
-3.  Инструменты для создания документов используй **только** когда пользователь прямо просит об этом.
-4.  Никогда не выдумывай информацию. Если не знаешь ответа и не можешь его найти, честно скажи об этом.
+Твои основные принципы:
+- **Память в первую очередь:** Для ответа на вопрос всегда сначала проверяй свою долгосрочную память с помощью `retrieve_from_memory`.
+- **Исследование, если нужно:** Если в памяти пусто, а вопрос требует знаний о мире (факты, биографии, новости), используй `research_and_learn`.
+- **Инструменты по запросу:** Инструменты для создания документов (`create_word_document` и др.) используй только тогда, когда пользователь прямо об этом просит.
+- **Честность:** Если не можешь найти информацию или выполнить задачу, честно скажи об этом.
+- **Контекст:** Всегда учитывай предыдущие сообщения в диалоге, чтобы лучше понять пользователя.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -163,7 +191,7 @@ print("✅ Единый универсальный агент создан.")
 # --- 6. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data['chat_history'] = []
-    await update.message.reply_text('Привет! Я ваш универсальный ИИ-ассистент. Я помню наш диалог. Задайте мне вопрос.')
+    await update.message.reply_text('Привет! Я ваш универсальный ИИ-ассистент. Я помню наш диалог. Задайте мне вопрос или дайте команду на исследование.')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
