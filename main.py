@@ -20,8 +20,7 @@ from langchain_tavily import TavilySearch
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-# ИСПРАВЛЕНИЕ: Правильный путь для импорта
-from langchain_core.utils.function_calling import render_text_description
+# УДАЛЯЕМ НЕНУЖНЫЙ ИМПОРТ
 
 # --- 2. Настройка ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -59,7 +58,6 @@ def retrieve_from_memory(query: str) -> str:
 
 # --- 5. СОЗДАНИЕ СПЕЦИАЛИСТОВ (Вспомогательных Агентов) ---
 def create_specialist_agent(persona: str, specialist_tools: list) -> AgentExecutor:
-    """Фабрика для создания stateless-агентов-специалистов."""
     prompt = ChatPromptTemplate.from_messages([
         ("system", persona),
         ("human", "{input}"),
@@ -91,16 +89,9 @@ main_tools = [
     ),
 ]
 
+# УПРОЩАЕМ ПРОМПТ ДЛЯ СОВМЕСТИМОСТИ
 main_system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов.
-
-ТВОЯ КОМАНДА ЭКСПЕРТОВ (ИНСТРУМЕНТЫ):
-{tools}
-
-ТВОЙ АЛГОРИТМ:
-1.  Пойми запрос пользователя, учитывая историю диалога.
-2.  Выбери наиболее подходящего эксперта (инструмент) для выполнения задачи.
-3.  Четко сформулируй задачу для эксперта и передай ему.
-4.  Получив ответ от эксперта, проанализируй его и дай финальный, развернутый и дружелюбный ответ пользователю в контексте вашего диалога."""
+Сначала всегда проверяй свою память с помощью MemoryRetriever. Если там нет ответа, выбери другого подходящего эксперта."""
 
 main_prompt = ChatPromptTemplate.from_messages([
     ("system", main_system_prompt),
@@ -108,8 +99,6 @@ main_prompt = ChatPromptTemplate.from_messages([
     ("human", "{input}"),
     MessagesPlaceholder("agent_scratchpad"),
 ])
-# Передаем инструменты напрямую в prompt
-main_prompt = main_prompt.partial(tools=render_text_description(main_tools))
 
 main_agent = create_tool_calling_agent(llm, main_tools, main_prompt)
 memory = ConversationBufferWindowMemory(k=8, memory_key="chat_history", return_messages=True)
