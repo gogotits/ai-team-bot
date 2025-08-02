@@ -11,18 +11,16 @@ from docx import Document as WordDocument
 from openpyxl import Workbook as ExcelWorkbook
 from fpdf import FPDF
 
-# ИСПРАВЛЕНИЕ: Правильное имя класса
-from langchain_google_genai import ChatGoogleGenerativeAI 
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from langchain.prompts import ChatPromptTemplate
 from langchain.agents import AgentExecutor, create_react_agent, Tool
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_tavily import TavilySearch
+from langchain.chains import RetrievalQA
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain, RetrievalQA
 
 # --- 2. Настройка ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -33,15 +31,16 @@ if "GOOGLE_API_KEY" not in os.environ or "TELEGRAM_BOT_TOKEN" not in os.environ 
 print("✅ Ключи API загружены.")
 
 # --- 3. Инициализация ИИ-компонентов ---
-# ИСПРАВЛЕНИЕ: Правильное имя класса
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 print("✅ LLM и модель эмбеддингов инициализированы.")
 
-# --- 4. Инициализация Баз Знаний и Функций-Инструментов ---
-print("Инициализация баз знаний и инструментов...")
-archivist_db = Chroma(persist_directory="/var/data/chroma_db_archivist", embedding_function=embeddings)
-analyst_db = Chroma(persist_directory="/var/data/chroma_db_analyst", embedding_function=embeddings)
+# --- 4. ЕДИНАЯ БАЗА ЗНАНИЙ И ФУНКЦИИ-ИНСТРУМЕНТЫ ---
+print("Инициализация единой базы знаний...")
+# Создаем ОДИН объект базы данных, который будет использоваться всеми
+persistent_storage_path = "/var/data/main_chroma_db"
+main_db = Chroma(persist_directory=persistent_storage_path, embedding_function=embeddings)
+print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
 def create_word_document(content: str) -> str:
     doc = WordDocument()
@@ -74,54 +73,52 @@ def create_pdf_document(content: str) -> str:
     pdf.output(temp_file.name)
     return temp_file.name
 
+# УЛУЧШЕННАЯ ФУНКЦИЯ ДЛЯ САМООБУЧЕНИЯ
 def research_and_learn(topic: str) -> str:
+    """Ищет информацию, создает саммари и добавляет его в единую базу знаний."""
     logger.info(f"Начинаю исследование по теме: {topic}")
-    search = TavilySearch(max_results=5)
+    search = TavilySearch(max_results=3)
     search_results = search.invoke(topic)
+
     if not search_results:
         return "Не удалось найти информацию по данной теме."
+
     raw_text = ""
     for result in search_results:
         raw_text += result + "\n\n"
-    summarizer_prompt = f"""Проанализируй следующий текст, найденный в интернете по теме '{topic}'.
-    Твоя задача — создать структурированное и подробное саммари. Выдели ключевые преимущества, недостатки, важные даты и факты.
-    Ответь только текстом саммари, без лишних вступлений.
-    ТЕКСТ ДЛЯ АНАЛИЗА:\n{raw_text}"""
+
+    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'.
+    Создай структурированное саммари, выделив ключевые факты.
+    Ответь только текстом саммари.
+    ТЕКСТ: {raw_text}"""
+    
     summary = llm.invoke(summarizer_prompt).content
     logger.info("Создано саммари найденной информации.")
+
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
-    archivist_db.add_documents(texts)
-    logger.info(f"Саммари по теме '{topic}' успешно добавлено в базу знаний Архивариуса.")
-    return f"Информация по теме '{topic}' была успешно исследована, проанализирована и сохранена в моей памяти."
+    
+    # Добавляем документы в ЕДИНУЮ базу данных
+    main_db.add_documents(texts)
+    logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
+    return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
 
 # --- 5. Определение Инструментов ---
-archivist_retriever = archivist_db.as_retriever()
-archivist_prompt = ChatPromptTemplate.from_template("""Твоя задача — ответить на вопрос пользователя, основываясь ТОЛЬКО на предоставленном ниже контексте.
-Будь подробным и структурированным. Если в контексте нет ответа, скажи "В моей базе знаний нет информации по этому вопросу".
+# Создаем цепочку для Архивариуса, которая работает с ЕДИНОЙ базой
+archivist_chain = RetrievalQA.from_chain_type(llm, retriever=main_db.as_retriever())
 
-Контекст:
-{context}
-
-Вопрос: {input}""")
-document_chain = create_stuff_documents_chain(llm, archivist_prompt)
-smart_archivist_chain = create_retrieval_chain(archivist_retriever, document_chain)
-
-analyst_chain = RetrievalQA.from_chain_type(llm, retriever=analyst_db.as_retriever())
 tools = [
     Tool(
         name="Researcher",
         func=research_and_learn,
-        description="Используй, чтобы исследовать новую тему, найти по ней информацию, проанализировать и сохранить ее в долгосрочную память."
+        description="Используй, чтобы исследовать новую тему и сохранить ее в долгосрочную память."
     ),
     Tool(
         name="Archivist",
-        # ИСПРАВЛЕНИЕ: Преобразуем строковый ввод 'query' в словарь {"input": query}
-        func=lambda query: smart_archivist_chain.invoke({"input": query}).get("answer", "Не удалось извлечь ответ."),
+        func=archivist_chain.invoke,
         description="Используй для ответов на вопросы по информации, которая УЖЕ ЕСТЬ в памяти."
     ),
     Tool(name="CreateWordDocument", func=create_word_document, description="Используй для создания документа Word (.docx)."),
-    Tool(name="Analyst", func=analyst_chain.invoke, description="Используй ТОЛЬКО для ответов на вопросы об общих финансовых и рыночных терминах."),
     Tool(name="CreateExcelDocument", func=create_excel_document, description="Используй для создания документа Excel (.xlsx)."),
     Tool(name="CreatePdfDocument", func=create_pdf_document, description="Используй для создания PDF документа (.pdf).")
 ]
@@ -139,19 +136,18 @@ agent_prompt_template = """Ты — автономный ИИ-ассистент
 {tools}
 
 ВАЖНЫЕ ПРАВИЛА:
-1.  **Проверка Памяти:** Прежде чем искать новую информацию с помощью 'Researcher', всегда сначала проверь, нет ли ответа в долгосрочной памяти с помощью 'Archivist'.
-2.  **Прямой Ответ:** Если инструмент 'Archivist' находит релевантную информацию, твой 'Final Answer' должен быть ответом на основе этой информации.
-3.  **Отчет об Ошибке:** Если 'Archivist' не находит нужной информации, не придумывай ответ и не используй другие инструменты без надобности. Твой 'Final Answer' должен быть сообщением об ошибке, например: "В моей базе знаний нет информации по этому вопросу. Пожалуйста, дайте команду на исследование."
-4.  **Создание Файлов:** Используй инструменты для создания документов (CreateWordDocument и др.) ТОЛЬКО ТОГДА, когда пользователь ЯВНО попросил об этом (например, "создай документ", "сделай отчет в Word").
-5.  **Вывод Файла:** Если ты используешь инструмент для создания документа, твой 'Final Answer' должен быть ТОЛЬКО путем к файлу.
+1.  **Проверка Памяти:** Прежде чем искать новую информацию ('Researcher'), всегда сначала проверь, нет ли ответа в памяти ('Archivist').
+2.  **Отчет об Ошибке:** Если 'Archivist' не находит информации, твой 'Final Answer' должен быть: "В моей базе знаний нет информации по этому вопросу. Пожалуйста, дайте команду на исследование."
+3.  **Создание Файлов:** Используй инструменты для создания документов ТОЛЬКО когда пользователь ЯВНО попросил об этом.
+4.  **Вывод Файла:** Если ты создаешь документ, твой 'Final Answer' должен быть ТОЛЬКО путем к файлу.
 
-ИСПОЛЬЗУЙ СЛЕДУЮЩИЙ ФОРМАТ ДЛЯ ОТВЕТА:
-Question: текущая цель или вопрос пользователя.
-Thought: Мои размышления, основанные на правилах. Какой мой следующий шаг? Какой инструмент использовать?
+ИСПОЛЬЗУЙ СЛЕДУЮЩИЙ ФОРМАТ:
+Question: вопрос пользователя.
+Thought: Мои размышления и план действий.
 Action: Название инструмента из списка [{tool_names}]
 Action Input: Входные данные для инструмента.
 Observation: Результат выполнения инструмента.
-Thought: Я достиг цели или обнаружил ошибку.
+Thought: Я достиг цели.
 Final Answer: Финальный ответ пользователю.
 
 Начинаем!
@@ -161,11 +157,12 @@ Thought:{agent_scratchpad}"""
 agent_prompt = ChatPromptTemplate.from_template(agent_prompt_template)
 agent = create_react_agent(llm, tools, agent_prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, memory=memory, verbose=True, handle_parsing_errors=True)
-print("✅ Автономный Агент c памятью и улучшенной логикой создан.")
+print("✅ Автономный Агент c единой памятью создан.")
 
 # --- 7. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Привет! Я ваш автономный ИИ-ассистент. Поставьте мне задачу для исследования.')
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
     logger.info(f"Получена задача: '{user_query}'")
@@ -186,6 +183,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Ошибка при обработке текста: {e}", exc_info=True)
         await update.message.reply_text(f"Произошла внутренняя ошибка.")
+
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info("Получено изображение.")
     await update.message.reply_text('Анализирую изображение...')
