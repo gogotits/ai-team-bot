@@ -53,35 +53,26 @@ def retrieve_from_memory(query: str) -> str:
 
 def research_and_learn(topic: str) -> str:
     logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
+    search = TavilySearch(max_results=3)
+    try:
+        search_results = search.invoke(topic)
+    except Exception as e:
+        logger.error(f"Ошибка при поиске в Tavily: {e}")
+        return "Произошла ошибка при доступе к поисковой системе."
+    if not search_results:
+        return "Не удалось найти информацию по данной теме в интернете."
     
-    planner_prompt = f"""Мне нужно провести исследование на тему '{topic}'. Создай список из 3-4 ключевых подтем для поиска. Ответь только списком."""
-    sub_topics_str = llm.invoke(planner_prompt).content
-    sub_topics = [line.strip('- ').strip() for line in sub_topics_str.split('\n') if line.strip()]
-    logger.info(f"План исследования: {sub_topics}")
-
-    search = TavilySearch(max_results=2)
-    full_raw_text = ""
-    for sub_topic in sub_topics:
-        logger.info(f"Ищу информацию по подтеме: {sub_topic}")
-        try:
-            search_results = search.invoke(f"{sub_topic} ({topic})")
-            full_raw_text += f"### Информация по '{sub_topic}':\n" + "\n\n".join([res.get('content', '') for res in search_results]) + "\n\n"
-        except Exception as e:
-            logger.error(f"Ошибка при поиске по подтеме '{sub_topic}': {e}")
-            continue
-
-    if not full_raw_text.strip():
-        return "Не удалось найти информацию по теме в интернете."
-
-    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'. Создай единое, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{full_raw_text}"""
+    raw_text = "\n\n".join([result.get('content', '') for result in search_results])
+    
+    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{raw_text}"""
     summary = llm.invoke(summarizer_prompt).content
-    logger.info("Создано финальное саммари.")
+    logger.info("Создано саммари найденной информации.")
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
-    main_db.add_documents(texts)
     
-    logger.info(f"Саммари по теме '{topic}' успешно добавлено в базу знаний.")
+    main_db.add_documents(texts)
+    logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
     return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
 
 def create_word_document(content: str) -> str:
@@ -118,17 +109,17 @@ tools = [
     Tool(
         name="retrieve_from_memory",
         func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос в долгосрочной памяти. Всегда пробуй этот инструмент первым."
+        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти (по ранее исследованным темам)."
     ),
     Tool(
-        name="research_and_learn",
+        name="internet_search_and_learn",
         func=research_and_learn,
-        description="Используй для исследования НОВОЙ, обширной темы в интернете и сохранения результатов в память. Применяй, если в памяти ничего не нашлось или если пользователь прямо просит 'исследуй', 'найди'."
+        description="Используй для поиска в интернете новой информации по запросу пользователя и для ее сохранения в память. Подходит для общих вопросов, фактов, новостей, погоды и команд 'исследуй'."
     ),
     Tool(
         name="create_word_document",
         func=create_word_document,
-        description="Используй для создания документа Microsoft Word (.docx)."
+        description="Используй для создания документа Microsoft Word (.docx), когда пользователь просит об этом."
     ),
     Tool(
         name="create_excel_document",
@@ -143,14 +134,15 @@ tools = [
 ]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, комплексно отвечая на его вопросы и выполняя задачи.
+# ФИНАЛЬНЫЙ, ГИБКИЙ ПРОМПТ
+system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, используя доступные инструменты. Ты должен сам решать, какой инструмент лучше всего подходит для выполнения задачи.
 
 Твои основные принципы:
-- **Память в первую очередь:** Для ответа на вопрос всегда сначала проверяй свою долгосрочную память с помощью `retrieve_from_memory`.
-- **Исследование, если нужно:** Если в памяти пусто, а вопрос требует знаний о мире, используй `research_and_learn`.
-- **Инструменты по запросу:** Инструменты для создания документов используй только тогда, когда пользователь прямо об этом просит.
+- **Память в первую очередь:** Для ответа на любой вопрос всегда сначала проверяй свою долгосрочную память с помощью `retrieve_from_memory`.
+- **Интернет, если нужно:** Если в памяти пусто ИЛИ вопрос требует очевидно актуальной информации (например, погода, новости, текущие факты), используй `internet_search_and_learn`.
+- **Инструменты по запросу:** Инструменты для создания документов (`create_word_document` и др.) используй только тогда, когда пользователь прямо об этом просит.
 - **Честность:** Если не можешь найти информацию, честно скажи об этом.
-- **Контекст:** Всегда учитывай предыдущие сообщения в диалоге.
+- **Контекст:** Всегда учитывай предыдущие сообщения в диалоге, чтобы лучше понять пользователя.
 """
 
 prompt = ChatPromptTemplate.from_messages([
