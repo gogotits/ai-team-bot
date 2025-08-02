@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import tempfile
+from langchain.agents.format_scratchpad.tools import render_text_description
 
 # Библиотеки для документов
 from docx import Document as WordDocument
@@ -112,6 +113,9 @@ main_prompt = ChatPromptTemplate.from_messages([
     MessagesPlaceholder("agent_scratchpad"),
 ])
 
+# Стало:
+# Важное изменение: передаем инструменты напрямую в prompt.
+main_prompt = main_prompt.partial(tools=render_text_description(main_tools))
 main_agent = create_tool_calling_agent(llm, main_tools, main_prompt)
 memory = ConversationBufferWindowMemory(k=8, memory_key="chat_history", return_messages=True)
 main_agent_executor = AgentExecutor(
