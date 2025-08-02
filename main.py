@@ -9,8 +9,6 @@ import tempfile
 
 # Библиотеки для документов
 from docx import Document as WordDocument
-from openpyxl import Workbook as ExcelWorkbook
-from fpdf import FPDF
 
 # Основные компоненты LangChain
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -44,132 +42,98 @@ retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
 # --- Функции-инструменты ---
-
-def retrieve_from_memory(query: str) -> str:
-    """Ищет ответ на запрос в долгосрочной памяти (базе знаний)."""
-    logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
-    docs = retriever.invoke(query)
-    if not docs:
-        return "В моей базе знаний нет информации по этому вопросу."
-    return "\n".join([doc.page_content for doc in docs])
-
 def research_and_learn(topic: str) -> str:
-    """Исследует тему в интернете, создает саммари и сохраняет его в долгосрочную память."""
     logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
+    search = TavilySearch(max_results=3)
+    try:
+        search_results = search.invoke(topic)
+    except Exception as e:
+        logger.error(f"Ошибка при поиске в Tavily: {e}")
+        return "Произошла ошибка при доступе к поисковой системе."
+    if not search_results:
+        return "Не удалось найти информацию по данной теме в интернете."
     
-    planner_prompt = f"""Мне нужно провести исследование на тему '{topic}'. Создай список из 3-4 ключевых подтем для поиска. Ответь только списком."""
-    sub_topics_str = llm.invoke(planner_prompt).content
-    sub_topics = [line.strip('- ').strip() for line in sub_topics_str.split('\n') if line.strip()]
-    logger.info(f"План исследования: {sub_topics}")
-
-    search = TavilySearch(max_results=2)
-    full_raw_text = ""
-    for sub_topic in sub_topics:
-        logger.info(f"Ищу информацию по подтеме: {sub_topic}")
-        try:
-            search_results = search.invoke(f"{sub_topic} ({topic})")
-            full_raw_text += f"### Информация по '{sub_topic}':\n" + "\n\n".join([res.get('content', '') for res in search_results]) + "\n\n"
-        except Exception as e:
-            logger.error(f"Ошибка при поиске по подтеме '{sub_topic}': {e}")
-            continue
-
-    if not full_raw_text.strip():
-        return "Не удалось найти информацию по теме в интернете."
-
-    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'. Создай единое, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{full_raw_text}"""
+    raw_text = "\n\n".join([result.get('content', '') for result in search_results])
+    
+    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'. Создай качественное, структурированное саммари на русском языке. Твой ответ должен содержать только саммари. ТЕКСТ:\n{raw_text}"""
     summary = llm.invoke(summarizer_prompt).content
-    logger.info("Создано финальное саммари.")
+    logger.info("Создано саммари найденной информации.")
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     texts = text_splitter.create_documents([summary], metadatas=[{"source": f"Research on {topic}"}])
-    main_db.add_documents(texts)
     
-    logger.info(f"Саммари по теме '{topic}' успешно добавлено в базу знаний.")
+    main_db.add_documents(texts)
+    logger.info(f"Саммари по теме '{topic}' успешно добавлено в единую базу знаний.")
     return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
+
+def answer_question_tool(query: str) -> str:
+    """Универсальный инструмент для ответа на вопросы. Сначала ищет в памяти, потом в интернете."""
+    logger.info(f"Универсальный инструмент: Поиск ответа на вопрос: {query}")
+    # Шаг 1: Поиск в памяти
+    memory_docs = retriever.invoke(query)
+    memory_context = "\n".join([doc.page_content for doc in memory_docs])
+    
+    # Шаг 2: Создаем промпт для LLM, чтобы она решила, достаточно ли информации
+    decision_prompt = f"""Проанализируй следующий вопрос пользователя и найденную в моей памяти информацию.
+    Вопрос: "{query}"
+    Найденная информация: "{memory_context}"
+
+    Если найденная информация полностью и исчерпывающе отвечает на вопрос, скажи только "ДОСТАТОЧНО".
+    В противном случае, скажи только "ИСКАТЬ В ИНТЕРНЕТЕ"."""
+
+    decision = llm.invoke(decision_prompt).content
+    
+    if "ДОСТАТОЧНО" in decision:
+        logger.info("Принято решение: информации в памяти достаточно.")
+        return memory_context
+    else:
+        logger.info("Принято решение: нужно искать в интернете.")
+        search = TavilySearch(max_results=3)
+        try:
+            search_results = search.invoke(query)
+            if not search_results:
+                return "Не удалось найти информацию в интернете."
+            internet_context = "\n\n".join([res.get('content', '') for res in search_results])
+            return internet_context
+        except Exception as e:
+            return f"Произошла ошибка при поиске в интернете: {e}"
 
 def create_word_document(content: str) -> str:
     doc = WordDocument()
     doc.add_paragraph(content)
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
     doc.save(temp_file.name)
+    logger.info(f"Создан Word документ: {temp_file.name}")
     return f"Документ Word успешно создан и доступен по пути: {temp_file.name}"
-
-def quick_internet_search(query: str) -> str:
-    """Для быстрых вопросов, не требующих сохранения в память."""
-    logger.info(f"Инструмент 'quick_internet_search': Поиск по запросу: {query}")
-    search = TavilySearch(max_results=3)
-    try:
-        results = search.invoke(query)
-        return "\n\n".join([res.get('content', '') for res in results])
-    except Exception as e:
-        return f"Произошла ошибка при поиске: {e}"
-
-def analyze_and_update_memory(query: str) -> str:
-    """Анализирует базу знаний и обновляет устаревшую информацию."""
-    logger.info("Инструмент 'analyze_and_update_memory': Начинаю анализ базы знаний.")
-    # Получаем все документы из базы
-    all_docs = main_db.get(include=["metadatas"])
-    if not all_docs or not all_docs.get('metadatas'):
-        return "База знаний пуста. Нечего анализировать."
-
-    # Извлекаем уникальные темы из метаданных
-    topics = list(set([meta['source'].replace("Research on ", "") for meta in all_docs['metadatas'] if 'source' in meta]))
-    if not topics:
-        return "В базе знаний нет тем для анализа."
-
-    logger.info(f"Найдены темы для анализа: {topics}")
-    
-    # Просим LLM выбрать одну, наиболее нуждающуюся в обновлении тему
-    planner_prompt = f"""Вот список тем, которые хранятся в моей базе знаний: {", ".join(topics)}.
-    Какая из этих тем, по-твоему, наиболее вероятно могла устареть (например, технологии, политика, наука)?
-    Ответь только названием одной темы."""
-    topic_to_update = llm.invoke(planner_prompt).content.strip()
-    
-    logger.info(f"Аналитик решил обновить тему: {topic_to_update}")
-    
-    # Запускаем исследование по этой теме
-    return research_and_learn(topic_to_update)
 
 # --- 5. Создание ЕДИНОГО АГЕНТА И ЕГО ИНСТРУМЕНТОВ ---
 tools = [
     Tool(
-        name="retrieve_from_memory",
-        func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос в долгосрочной памяти. Это твой основной источник знаний об исследованных ранее темах."
-    ),
-    Tool(
-        name="quick_internet_search",
-        func=quick_internet_search,
-        description="Используй для быстрых вопросов о текущих событиях, погоде, новостях, которые не нужно сохранять в память."
+        name="answer_question",
+        func=answer_question_tool,
+        description="Используй этот универсальный инструмент для ответа на ЛЮБОЙ вопрос пользователя (например, о погоде, фактах, или по ранее исследованным темам)."
     ),
     Tool(
         name="research_and_learn",
         func=research_and_learn,
-        description="Используй для глубокого исследования НОВОЙ, обширной темы и сохранения результатов в память. Применяй, если пользователь прямо просит 'исследуй', 'найди'."
-    ),
-    Tool(
-        name="analyze_and_update_memory",
-        func=analyze_and_update_memory,
-        description="Используй, когда пользователь просит 'актуализируй знания' или 'обнови информацию'. Этот инструмент сам выберет, какую тему обновить."
+        description="Используй этот инструмент, только когда пользователь прямо просит 'исследуй' или 'найди и сохрани', чтобы найти и сохранить в память обширную информацию."
     ),
     Tool(
         name="create_word_document",
         func=create_word_document,
-        description="Используй для создания документа Microsoft Word (.docx)."
+        description="Используй для создания документа Microsoft Word (.docx), когда пользователь просит об этом."
     ),
 ]
 print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя задача — помогать пользователю, комплексно отвечая на его вопросы и выполняя задачи, используя доступные инструменты.
+system_prompt = """Ты — умный и дружелюбный ИИ-ассистент. Твоя главная задача — помогать пользователю.
+У тебя есть инструменты. Ты должен сам решать, какой инструмент лучше всего подходит.
 
-Твои основные принципы:
-- **Память в первую очередь:** Для ответа на вопрос всегда сначала проверяй свою долгосрочную память с помощью `retrieve_from_memory`.
-- **Быстрый поиск для фактов:** Если в памяти пусто, а вопрос требует быстрого ответа о текущих событиях (погода, новости), используй `quick_internet_search`.
-- **Глубокое исследование по команде:** Если пользователь прямо просит 'исследуй' или 'сохрани', используй `research_and_learn`.
-- **Анализ по команде:** Если пользователь просит 'обнови' или 'актуализируй', используй `analyze_and_update_memory`.
-- **Инструменты по запросу:** Инструменты для создания документов используй только тогда, когда пользователь прямо об этом просит.
-- **Честность:** Если не можешь найти информацию, честно скажи об этом.
-- **Контекст:** Всегда учитывай предыдущие сообщения в диалоге.
+Твои принципы:
+- Для ответа на любой обычный вопрос используй `answer_question`.
+- Для больших исследовательских задач по команде 'исследуй' используй `research_and_learn`.
+- Для создания файлов используй `create_word_document`.
+- Всегда будь вежлив и старайся помочь.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -235,15 +199,9 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         base64_image = base64.b64encode(photo_bytes).decode("utf-8")
         
-        message_payload = HumanMessage(
-            content=[
-                {"type": "text", "text": user_caption},
-                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_image}"},
-            ]
-        )
+        message_payload = HumanMessage(content=[{"type": "text", "text": user_caption}, {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_image}"},])
         response = llm.invoke([message_payload])
         await update.message.reply_text(response.content)
-        logger.info("Отправлен ответ на изображение.")
     except Exception as e:
         logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
         await update.message.reply_text(f"Не удалось обработать изображение.")
