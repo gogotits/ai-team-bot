@@ -53,15 +53,13 @@ def retrieve_from_memory(query: str) -> str:
     return "\n".join([doc.page_content for doc in docs])
 
 def research_and_learn(topic: str) -> str:
+    """Исследует тему в интернете, создает саммари и сохраняет его в долгосрочную память."""
     logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
     
     # Шаг 1: Создаем план исследования с помощью LLM
     planner_prompt = f"""Мне нужно провести исследование на тему '{topic}'. 
     Создай список из 3-4 ключевых подтем для поиска в интернете, чтобы полностью раскрыть эту тему.
-    Ответь только списком, где каждый пункт начинается с новой строки. Например:
-    - Биография
-    - Ключевые достижения
-    - Влияние на современников"""
+    Ответь только списком, где каждый пункт начинается с новой строки."""
     
     sub_topics_str = llm.invoke(planner_prompt).content
     sub_topics = [line.strip('- ').strip() for line in sub_topics_str.split('\n') if line.strip()]
@@ -73,8 +71,10 @@ def research_and_learn(topic: str) -> str:
     for sub_topic in sub_topics:
         logger.info(f"Ищу информацию по подтеме: {sub_topic}")
         try:
-            search_results = search.invoke(f"{sub_topic} ({topic})") # Уточняем запрос
+            # Правильно вызываем поиск и обрабатываем результат
+            search_results = search.invoke(f"{sub_topic} ({topic})")
             full_raw_text += f"### Информация по '{sub_topic}':\n"
+            # Tavily возвращает список словарей, извлекаем 'content'
             full_raw_text += "\n\n".join([res.get('content', '') for res in search_results]) + "\n\n"
         except Exception as e:
             logger.error(f"Ошибка при поиске по подтеме '{sub_topic}': {e}")
@@ -83,9 +83,9 @@ def research_and_learn(topic: str) -> str:
     if not full_raw_text.strip():
         return "Не удалось найти информацию по данной теме в интернете."
 
-    # Шаг 3: Создаем финальное саммари из всей найденной информации
-    summarizer_prompt = f"""Проанализируй следующий текст, найденный в интернете по теме '{topic}'.
-    Текст разбит на разделы по подтемам. Твоя задача — создать единое, качественное и структурированное саммари на русском языке.
+    # Шаг 3: Создаем финальное саммари
+    summarizer_prompt = f"""Проанализируй следующий текст по теме '{topic}'.
+    Создай единое, качественное и структурированное саммари на русском языке.
     Твой ответ должен содержать только саммари, без лишних фраз.
     ТЕКСТ ДЛЯ АНАЛИЗА:\n{full_raw_text}"""
     
