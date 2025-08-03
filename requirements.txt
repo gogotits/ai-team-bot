@@ -119,3 +119,4 @@ langchain-tavily
 python-docx
 openpyxl
 fpdf2
+tavily-python
