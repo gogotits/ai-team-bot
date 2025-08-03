@@ -8,14 +8,17 @@ from core.config import llm
 from tools.tool_researcher import researcher_tool
 from tools.tool_archivist import archivist_tool
 from tools.tool_secretary import secretary_tool
+# Импортируем нашего "начальника отдела"
 from tools.fact_checker_department.agent import fact_checker_agent_executor
 
 print("Инициализация Главного Агента и его команды...")
 
+# Собираем команду экспертов (начальников отделов)
 main_tools = [
     Tool(
         name="FactCheckerDepartment",
-        func=lambda user_input_str: fact_checker_agent_executor.invoke({"input": user_input_str}),
+        # ИСПРАВЛЕНИЕ: Мы извлекаем только поле 'output' из ответа эксперта
+        func=lambda user_input_str: fact_checker_agent_executor.invoke({"input": user_input_str}).get('output', 'Эксперт не дал ответа.'),
         description="Используй этот отдел для получения быстрых, фактических ответов на вопросы о мире (погода, новости, столицы, курсы валют и т.д.)."
     ),
     researcher_tool,
@@ -23,26 +26,16 @@ main_tools = [
     secretary_tool,
 ]
 
-# ФИНАЛЬНЫЙ ПРОМПТ ДЛЯ ОТЛАДКИ ("ДУМАЙ ВСЛУХ")
-system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — проанализировать запрос пользователя и делегировать его ОДНОМУ эксперту из твоей команды.
+# Промпт для Главного Агента
+system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
 
 Твоя команда:
-- `FactCheckerDepartment`: Для быстрых фактов (погода, новости).
-- `DeepResearcher`: Для глубокого исследования и сохранения знаний.
-- `MemoryArchivist`: Для поиска в базе знаний.
-- `Secretary`: Для создания документов.
+- `FactCheckerDepartment`: Отдел быстрых фактов (погода, новости).
+- `DeepResearcher`: Отдел глубоких исследований и сохранения знаний.
+- `MemoryArchivist`: Отдел по работе с базой знаний.
+- `Secretary`: Отдел по созданию документов.
 
-Твой финальный ответ ДОЛЖЕН быть в следующем формате:
-
-**План:**
-1. [Здесь напиши свои размышления: какой эксперт нужен и почему]
-2. [Здесь напиши название эксперта, которого ты выбрал]
-
-**Результат от эксперта:**
-[Здесь дословно вставь результат, который вернул эксперт]
-
-**Финальный ответ:**
-[Здесь напиши итоговый, дружелюбный ответ для пользователя на основе результата]
+Твоя задача — понять истинную цель пользователя и выбрать ОДИН наиболее подходящий отдел для ее выполнения.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -52,6 +45,7 @@ prompt = ChatPromptTemplate.from_messages([
     MessagesPlaceholder("agent_scratchpad"),
 ])
 
+# Создаем Главного Агента и его Исполнителя
 agent = create_tool_calling_agent(llm, main_tools, prompt)
 memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
 agent_executor = AgentExecutor(
@@ -61,4 +55,4 @@ agent_executor = AgentExecutor(
     verbose=True,
     handle_parsing_errors=True
 )
-print("✅ Главный Агент (Руководитель) с режимом отладки готов к работе.")
+print("✅ Главный Агент (Руководитель) и его команда готовы к работе.")
