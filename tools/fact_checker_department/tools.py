@@ -8,37 +8,51 @@ logger = logging.getLogger(__name__)
 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-def get_fact(query: str) -> str:
-    """Универсальная функция для поиска фактов, включая погоду."""
+def get_weather(query: str) -> str:
+    """Ищет погоду в указанном месте."""
     if not TAVILY_API_KEY: return "Ошибка: API-ключ для Tavily не найден на сервере."
-    logger.info(f"Сотрудник 'FactSearcher': Ищу факт по запросу: {query}")
+    logger.info(f"Сотрудник 'WeatherTool': Ищу погоду для: {query}")
+    try:
+        search = TavilySearch(max_results=1, api_key=TAVILY_API_KEY)
+        # LangChain wrapper для Tavily возвращает list[str]
+        results = search.invoke(f"погода в {query}")
+        
+        if not results:
+            return "Поиск погоды в интернете не дал результатов."
+        
+        # ИСПРАВЛЕНИЕ: Обрабатываем результат как простую строку
+        return results[0]
+    except Exception as e:
+        logger.error(f"Ошибка в WeatherTool: {e}", exc_info=True)
+        return f"Произошла ошибка при поиске погоды: {e}"
+
+def get_general_fact(query: str) -> str:
+    """Ищет любой другой быстрый факт."""
+    if not TAVILY_API_KEY: return "Ошибка: API-ключ для Tavily не найден на сервере."
+    logger.info(f"Сотрудник 'GeneralSearch': Ищу факт по запросу: {query}")
     try:
         search = TavilySearch(max_results=1, api_key=TAVILY_API_KEY)
         results = search.invoke(query)
-        
+
         if not results:
-            return "Поиск в интернете не дал результатов по этому запросу."
+            return "Поиск в интернете не дал результатов."
 
-        # Tavily часто дает прямой ответ в поле 'answer'
-        answer = results[0].get('answer')
-        if answer:
-            logger.info(f"Найден прямой ответ от Tavily: {answer}")
-            return answer
-            
-        # Если прямого ответа нет, возвращаем самое релевантное содержание
-        content = results[0].get('content', 'Не удалось извлечь информацию из результата.')
-        logger.info(f"Возвращаю контент из первого источника.")
-        return content
-
+        # ИСПРАВЛЕНИЕ: Обрабатываем результат как простую строку
+        return results[0]
     except Exception as e:
-        logger.error(f"Ошибка в FactSearcher: {e}", exc_info=True)
-        return f"Произошла ошибка при поиске факта: {e}"
+        logger.error(f"Ошибка в GeneralSearch: {e}", exc_info=True)
+        return f"Ошибка при поиске факта: {e}"
 
-# Теперь у нас один, но очень умный сотрудник в отделе фактов
-fact_checker_tool = Tool(
-    name="FactSearcher",
-    func=get_fact,
-    description="Используй для поиска в интернете любых быстрых фактов: погода, новости, курсы валют, столицы и т.д."
+weather_tool = Tool(
+    name="WeatherTool",
+    func=get_weather,
+    description="Используй для получения информации о погоде в конкретном городе."
 )
 
-fact_checker_tools = [fact_checker_tool]
+general_search_tool = Tool(
+    name="GeneralSearch",
+    func=get_general_fact,
+    description="Используй для поиска любых других общих фактов (новости, столицы, курсы валют)."
+)
+
+fact_checker_tools = [weather_tool, general_search_tool]

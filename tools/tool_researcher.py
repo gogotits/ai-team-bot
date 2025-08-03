@@ -4,7 +4,7 @@ import os
 from langchain_tavily import TavilySearch
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.agents import Tool
-from core.config import llm, db
+from core.config import llm, db 
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,8 @@ def research_and_learn(topic: str) -> str:
     search = TavilySearch(max_results=3, api_key=api_key)
     try:
         search_results = search.invoke(topic)
-        raw_text = "\n\n".join([result.get('content', '') for result in search_results])
+        # ИСПРАВЛЕНИЕ: Обрабатываем результат как простой список строк
+        raw_text = "\n\n".join(search_results)
         if not raw_text.strip(): return "Поиск в интернете не дал результатов."
         
         summarizer_prompt = f"""Проанализируй текст по теме '{topic}'. Создай качественное саммари. Ответ должен содержать только саммари."""
