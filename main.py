@@ -14,7 +14,7 @@ from fpdf import FPDF
 
 # Основные компоненты LangChain
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain.agents import AgentExecutor, create_tool_calling_agent, Tool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferWindowMemory
@@ -43,13 +43,13 @@ main_db = Chroma(persist_directory=persistent_storage_path, embedding_function=e
 retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
-# --- 5. ФУНКЦИИ-ИНСТРУМЕНТЫ ДЛЯ ЭКСПЕРТОВ ---
+# --- 5. ФУНКЦИИ-ЭКСПЕРТЫ ---
 
 def research_and_learn(topic: str) -> str:
     logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
     try:
-        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ
-        search = TavilySearch(max_results=3, api_key=os.environ["TAVILY_API_KEY"])
+        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ для надежности
+        search = TavilySearch(max_results=3, api_key=os.environ.get("TAVILY_API_KEY"))
         search_results = search.invoke(topic)
         raw_text = "\n\n".join([result.get('content', '') for result in search_results])
         if not raw_text.strip(): return "Поиск в интернете не дал результатов."
@@ -76,9 +76,12 @@ def retrieve_from_memory(query: str) -> str:
 def quick_internet_search(query: str) -> str:
     logger.info(f"Эксперт 'FactChecker': Быстрый поиск по запросу: {query}")
     try:
-        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ
-        search = TavilySearch(max_results=1, api_key=os.environ["TAVILY_API_KEY"])
+        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ для надежности
+        search = TavilySearch(max_results=1, api_key=os.environ.get("TAVILY_API_KEY"))
         results = search.invoke(query)
+        answer = results[0].get('answer')
+        if answer:
+            return answer
         return results[0].get('content', 'Не удалось извлечь информацию.')
     except Exception as e:
         return f"Ошибка при быстром поиске: {e}"
@@ -119,99 +122,73 @@ def create_document(input_str: str) -> str:
     except Exception as e:
         return f"Ошибка при создании документа: {e}"
 
-def analyze_and_update_memory(query: str) -> str:
-    logger.info("Эксперт 'Analyst': Начинаю анализ базы знаний.")
-    all_docs = main_db.get(include=["metadatas"])
-    if not all_docs or not all_docs.get('metadatas'):
-        return "База знаний пуста. Нечего анализировать."
-    topics = list(set([meta['source'].replace("Research on ", "") for meta in all_docs['metadatas'] if 'source' in meta]))
-    if not topics:
-        return "В базе знаний нет тем для анализа."
-    
-    planner_prompt = f"""Вот список тем в моей базе знаний: {", ".join(topics)}. Какая из этих тем наиболее вероятно могла устареть? Ответь только названием одной темы."""
-    topic_to_update = llm.invoke(planner_prompt).content.strip()
-    
-    logger.info(f"Аналитик решил обновить тему: {topic_to_update}")
-    return research_and_learn(topic_to_update)
-
-# --- 6. СОЗДАНИЕ ГЛАВНОГО АГЕНТА (РУКОВОДИТЕЛЯ) И ЕГО КОМАНДЫ ---
-print("Инициализация Главного Агента и его команды...")
-
-main_tools = [
-    Tool(
-        name="FactChecker",
-        func=quick_internet_search,
-        description="Используй для быстрых, фактических вопросов о мире (погода, новости, столицы, курсы валют и т.д.), которые не нужно сохранять."
-    ),
-    Tool(
-        name="DeepResearcher",
-        func=research_and_learn,
-        description="Используй, когда пользователь прямо просит 'исследуй', 'найди и сохрани', чтобы найти и сохранить в память обширную информацию по сложной теме."
-    ),
+# --- 6. СОЗДАНИЕ АГЕНТА-СОБЕСЕДНИКА ---
+conversational_tools = [
     Tool(
         name="MemoryArchivist",
         func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым для вопросов о ранее исследованных темах."
-    ),
-    Tool(
-        name="KnowledgeAnalyst",
-        func=analyze_and_update_memory,
-        description="Используй, когда пользователь просит 'актуализируй знания' или 'обнови информацию'."
-    ),
-    Tool(
-        name="Secretary",
-        func=create_document,
-        description="Используй для создания документов. Входные данные должны быть строкой в формате 'текст для документа|тип документа' (например, 'Привет, мир|word')."
+        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти."
     ),
 ]
+system_prompt_conv = """Ты — дружелюбный ИИ-ассистент. Твоя задача — поддерживать беседу с пользователем.
+Если ты можешь ответить на вопрос, используя свою память (`MemoryArchivist`), сделай это.
+Если пользователь задает общий вопрос, на который ты не знаешь ответа, вежливо скажи, что не знаешь, и предложи ему использовать команды "исследуй" или "посмотри в интернете"."""
 
-system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
-
-Твоя команда:
-- `FactChecker`: Для быстрых фактов из интернета (погода, новости).
-- `DeepResearcher`: Для глубокого исследования и сохранения знаний по команде "исследуй".
-- `MemoryArchivist`: Для поиска в твоей базе знаний. Обращайся к нему первым для вопросов по исследованным темам.
-- `KnowledgeAnalyst`: Для анализа и обновления базы знаний по команде "обнови".
-- `Secretary`: Для создания документов по команде "создай документ".
-
-Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения. Получив ответ от эксперта, сформулируй финальный, дружелюбный ответ для пользователя.
-"""
-
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
+prompt_conv = ChatPromptTemplate.from_messages([
+    ("system", system_prompt_conv),
     MessagesPlaceholder("chat_history"),
     ("human", "{input}"),
     MessagesPlaceholder("agent_scratchpad"),
 ])
-
-agent = create_tool_calling_agent(llm, main_tools, prompt)
 memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
-agent_executor = AgentExecutor(
-    agent=agent,
-    tools=main_tools,
+conversational_agent_executor = AgentExecutor(
+    agent=create_tool_calling_agent(llm, conversational_tools, prompt_conv),
+    tools=conversational_tools,
     memory=memory,
     verbose=True,
     handle_parsing_errors=True
 )
-print("✅ Главный Агент (Руководитель) и его команда готовы к работе.")
+print("✅ Агент-Собеседник готов к работе.")
 
 # --- 7. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data['chat_history'] = []
-    await update.message.reply_text('Привет! Я ваш ИИ-ассистент с командой экспертов. О чем поговорим сегодня?')
+    if 'chat_history' in context.user_data:
+        del context.user_data['chat_history']
+    memory.clear()
+    await update.message.reply_text('Привет! Я ваш ИИ-ассистент. Память очищена. Задайте мне вопрос или дайте команду.')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
     logger.info(f"Получена задача: '{user_query}'")
-    await update.message.reply_text('Приступаю к выполнению задачи... Обращаюсь к команде экспертов.')
+    await update.message.reply_text('Приступаю к выполнению задачи...')
+    
+    response_text = ""
     
     try:
-        chat_history = context.user_data.get('chat_history', [])
-        result = agent_executor.invoke({"input": user_query, "chat_history": chat_history})
-        
-        context.user_data['chat_history'] = result['chat_history']
+        # ЖЕСТКИЙ ДИСПЕТЧЕР НА ОСНОВЕ КОМАНД
+        if user_query.lower().startswith("исследуй"):
+            topic = user_query[len("исследуй"):].strip()
+            response_text = research_and_learn(topic)
+        elif user_query.lower().startswith("посмотри в интернете"):
+            topic = user_query[len("посмотри в интернете"):].strip()
+            response_text = quick_internet_search(topic)
+        elif user_query.lower().startswith("предоставь информацию из памяти"):
+            topic = user_query[len("предоставь информацию из памяти"):].strip()
+            response_text = retrieve_from_memory(topic)
+        elif user_query.lower().startswith("создай документ"):
+            topic = user_query[len("создай документ"):].strip()
+            response_text = create_document(topic)
+        # Удаляем 'аналитика' для упрощения и стабильности
+        # elif user_query.lower().startswith("актуализируй"):
+        #     topic = user_query[len("актуализируй"):].strip()
+        #     response_text = analyze_and_update_memory(topic)
+        else:
+            # Если нет команды, вызываем агента-собеседника
+            chat_history = context.user_data.get('chat_history', [])
+            result = conversational_agent_executor.invoke({"input": user_query, "chat_history": chat_history})
+            response_text = result["output"]
+            context.user_data['chat_history'] = result['chat_history']
 
-        response_text = result["output"]
         if response_text.startswith("Документ") and ('.docx' in response_text or '.xlsx' in response_text or '.pdf' in response_text):
             try:
                 file_path = response_text.split(":")[-1].strip()
@@ -251,7 +228,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
-    print("🚀 Запускаю иерархического Telegram-бота...")
+    print("🚀 Запускаю Telegram-бота с жестким диспетчером...")
     application.run_polling()
 
 if __name__ == '__main__':
