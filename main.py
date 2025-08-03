@@ -14,9 +14,9 @@ from fpdf import FPDF
 
 # Основные компоненты LangChain
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain.agents import AgentExecutor, create_tool_calling_agent, Tool
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage
+from langchain.agents import AgentExecutor, create_react_agent, Tool
+from langchain_core.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_tavily import TavilySearch
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -36,19 +36,18 @@ llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.5)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 print("✅ LLM и модель эмбеддингов инициализированы.")
 
-# --- 4. ЕДИНАЯ БАЗА ЗНАНИЙ ---
+# --- 4. ЕДИНАЯ БАЗА ЗНАНИЙ И ФУНКЦИИ-ИНСТРУМЕНТЫ ---
 print("Инициализация единой базы знаний...")
 persistent_storage_path = "/var/data/main_chroma_db"
 main_db = Chroma(persist_directory=persistent_storage_path, embedding_function=embeddings)
 retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
-# --- 5. ФУНКЦИИ-ЭКСПЕРТЫ ---
+# --- Функции-инструменты ---
 
 def research_and_learn(topic: str) -> str:
-    logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
+    logger.info(f"Инструмент 'research_and_learn': Начинаю исследование по теме: {topic}")
     try:
-        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ для надежности
         search = TavilySearch(max_results=3, api_key=os.environ.get("TAVILY_API_KEY"))
         search_results = search.invoke(topic)
         raw_text = "\n\n".join([result.get('content', '') for result in search_results])
@@ -63,22 +62,22 @@ def research_and_learn(topic: str) -> str:
         
         return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
     except Exception as e:
-        logger.error(f"Ошибка в работе 'DeepResearcher': {e}", exc_info=True)
+        logger.error(f"Ошибка в работе 'research_and_learn': {e}", exc_info=True)
         return f"В процессе исследования произошла ошибка: {e}"
 
 def retrieve_from_memory(query: str) -> str:
-    logger.info(f"Эксперт 'MemoryArchivist': Поиск в памяти по запросу: {query}")
+    logger.info(f"Инструмент 'retrieve_from_memory': Поиск по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
         return "В моей базе знаний нет информации по этому вопросу."
     return "\n".join([doc.page_content for doc in docs])
 
 def quick_internet_search(query: str) -> str:
-    logger.info(f"Эксперт 'FactChecker': Быстрый поиск по запросу: {query}")
+    logger.info(f"Инструмент 'quick_internet_search': Быстрый поиск по запросу: {query}")
     try:
-        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ для надежности
         search = TavilySearch(max_results=1, api_key=os.environ.get("TAVILY_API_KEY"))
         results = search.invoke(query)
+        # Tavily может вернуть ответ в поле 'answer' или в 'content' первого результата
         answer = results[0].get('answer')
         if answer:
             return answer
@@ -87,7 +86,7 @@ def quick_internet_search(query: str) -> str:
         return f"Ошибка при быстром поиске: {e}"
 
 def create_document(input_str: str) -> str:
-    logger.info(f"Эксперт 'Secretary': Получена задача на создание документа.")
+    logger.info(f"Инструмент 'create_document': Получена задача на создание документа.")
     try:
         parts = input_str.split('|')
         if len(parts) != 2:
@@ -100,96 +99,96 @@ def create_document(input_str: str) -> str:
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
             doc.save(temp_file.name)
             return f"Документ Word успешно создан: {temp_file.name}"
-        elif doc_type == 'excel':
-            wb = ExcelWorkbook()
-            ws = wb.active
-            for line in content.split('\n'):
-                ws.append(line.split(','))
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
-            wb.save(temp_file.name)
-            return f"Документ Excel успешно создан: {temp_file.name}"
-        elif doc_type == 'pdf':
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
-            pdf.set_font('DejaVu', '', 12)
-            pdf.multi_cell(0, 10, content)
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
-            pdf.output(temp_file.name)
-            return f"PDF документ успешно создан: {temp_file.name}"
+        # Можно добавить Excel и PDF по аналогии...
         else:
-            return "Неподдерживаемый тип документа. Доступные типы: word, excel, pdf."
+            return "Неподдерживаемый тип документа. Доступные типы: word."
     except Exception as e:
         return f"Ошибка при создании документа: {e}"
 
-# --- 6. СОЗДАНИЕ АГЕНТА-СОБЕСЕДНИКА ---
-conversational_tools = [
+# --- 5. Создание ЕДИНОГО АГЕНТА И ЕГО ИНСТРУМЕНТОВ ---
+tools = [
     Tool(
-        name="MemoryArchivist",
+        name="MemoryRetriever",
         func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти."
+        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым для вопросов о ранее исследованных темах."
+    ),
+    Tool(
+        name="FactChecker",
+        func=quick_internet_search,
+        description="Используй для быстрых, фактических вопросов о мире (погода, новости, столицы, курсы валют и т.д.), которые не нужно сохранять."
+    ),
+    Tool(
+        name="DeepResearcher",
+        func=research_and_learn,
+        description="Используй, когда пользователь прямо просит 'исследуй', 'найди и сохрани', чтобы найти и сохранить в память обширную информацию по сложной теме."
+    ),
+    Tool(
+        name="Secretary",
+        func=create_document,
+        description="Используй для создания документов. Входные данные должны быть строкой в формате 'текст для документа|тип документа' (например, 'Привет, мир|word')."
     ),
 ]
-system_prompt_conv = """Ты — дружелюбный ИИ-ассистент. Твоя задача — поддерживать беседу с пользователем.
-Если ты можешь ответить на вопрос, используя свою память (`MemoryArchivist`), сделай это.
-Если пользователь задает общий вопрос, на который ты не знаешь ответа, вежливо скажи, что не знаешь, и предложи ему использовать команды "исследуй" или "посмотри в интернете"."""
+print(f"✅ Инструменты готовы: {[tool.name for tool in tools]}")
 
-prompt_conv = ChatPromptTemplate.from_messages([
-    ("system", system_prompt_conv),
-    MessagesPlaceholder("chat_history"),
-    ("human", "{input}"),
-    MessagesPlaceholder("agent_scratchpad"),
-])
-memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
-conversational_agent_executor = AgentExecutor(
-    agent=create_tool_calling_agent(llm, conversational_tools, prompt_conv),
-    tools=conversational_tools,
+
+# --- 6. СОЗДАНИЕ НАДЕЖНОГО ReAct АГЕНТА ---
+
+# Классический и надежный шаблон для ReAct агента
+template = """Отвечай на следующие вопросы как можно лучше. У тебя есть доступ к следующим инструментам:
+
+{tools}
+
+Используй следующий формат:
+
+Question: вопрос, на который ты должен ответить
+Thought: ты должен подумать, что делать.
+Action: действие, которое нужно предпринять. Должно быть одним из [{tool_names}]
+Action Input: входные данные для действия.
+Observation: результат действия.
+... (этот цикл Thought/Action/Action Input/Observation может повторяться)
+Thought: Теперь я знаю финальный ответ.
+Final Answer: финальный ответ на исходный вопрос.
+
+Начинаем!
+
+Previous conversation history:
+{chat_history}
+
+New question: {input}
+{agent_scratchpad}"""
+
+prompt = PromptTemplate.from_template(template)
+
+agent = create_react_agent(llm, tools, prompt)
+# Важно: return_messages=False для ReAct агента, который работает с текстом
+memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=False) 
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
     memory=memory,
     verbose=True,
     handle_parsing_errors=True
 )
-print("✅ Агент-Собеседник готов к работе.")
+print("✅ Единый универсальный ReAct агент создан.")
 
 # --- 7. Функции-обработчики для Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if 'chat_history' in context.user_data:
-        del context.user_data['chat_history']
+    # Очищаем память при старте нового диалога
     memory.clear()
-    await update.message.reply_text('Привет! Я ваш ИИ-ассистент. Память очищена. Задайте мне вопрос или дайте команду.')
+    await update.message.reply_text('Привет! Я ваш ИИ-ассистент. Память очищена. Задайте мне вопрос.')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
     logger.info(f"Получена задача: '{user_query}'")
     await update.message.reply_text('Приступаю к выполнению задачи...')
     
-    response_text = ""
-    
     try:
-        # ЖЕСТКИЙ ДИСПЕТЧЕР НА ОСНОВЕ КОМАНД
-        if user_query.lower().startswith("исследуй"):
-            topic = user_query[len("исследуй"):].strip()
-            response_text = research_and_learn(topic)
-        elif user_query.lower().startswith("посмотри в интернете"):
-            topic = user_query[len("посмотри в интернете"):].strip()
-            response_text = quick_internet_search(topic)
-        elif user_query.lower().startswith("предоставь информацию из памяти"):
-            topic = user_query[len("предоставь информацию из памяти"):].strip()
-            response_text = retrieve_from_memory(topic)
-        elif user_query.lower().startswith("создай документ"):
-            topic = user_query[len("создай документ"):].strip()
-            response_text = create_document(topic)
-        # Удаляем 'аналитика' для упрощения и стабильности
-        # elif user_query.lower().startswith("актуализируй"):
-        #     topic = user_query[len("актуализируй"):].strip()
-        #     response_text = analyze_and_update_memory(topic)
-        else:
-            # Если нет команды, вызываем агента-собеседника
-            chat_history = context.user_data.get('chat_history', [])
-            result = conversational_agent_executor.invoke({"input": user_query, "chat_history": chat_history})
-            response_text = result["output"]
-            context.user_data['chat_history'] = result['chat_history']
-
-        if response_text.startswith("Документ") and ('.docx' in response_text or '.xlsx' in response_text or '.pdf' in response_text):
+        # ReAct агент сам управляет историей через объект memory,
+        # нам не нужно передавать ее в invoke
+        result = agent_executor.invoke({"input": user_query})
+        
+        response_text = result["output"]
+        if response_text.startswith("Документ") and '.docx' in response_text:
             try:
                 file_path = response_text.split(":")[-1].strip()
                 if os.path.exists(file_path):
@@ -228,7 +227,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
-    print("🚀 Запускаю Telegram-бота с жестким диспетчером...")
+    print("🚀 Запускаю Telegram-бота на архитектуре ReAct...")
     application.run_polling()
 
 if __name__ == '__main__':
