@@ -46,10 +46,10 @@ print(f"✅ Единая база знаний готова. Записей в �
 # --- 5. ФУНКЦИИ-ИНСТРУМЕНТЫ ДЛЯ ЭКСПЕРТОВ ---
 
 def research_and_learn(topic: str) -> str:
-    """Глубоко исследует тему, создает саммари и сохраняет в память."""
     logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
-    search = TavilySearch(max_results=3)
     try:
+        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ
+        search = TavilySearch(max_results=3, api_key=os.environ["TAVILY_API_KEY"])
         search_results = search.invoke(topic)
         raw_text = "\n\n".join([result.get('content', '') for result in search_results])
         if not raw_text.strip(): return "Поиск в интернете не дал результатов."
@@ -67,7 +67,6 @@ def research_and_learn(topic: str) -> str:
         return f"В процессе исследования произошла ошибка: {e}"
 
 def retrieve_from_memory(query: str) -> str:
-    """Ищет ответ на запрос в долгосрочной памяти."""
     logger.info(f"Эксперт 'MemoryArchivist': Поиск в памяти по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
@@ -75,18 +74,16 @@ def retrieve_from_memory(query: str) -> str:
     return "\n".join([doc.page_content for doc in docs])
 
 def quick_internet_search(query: str) -> str:
-    """Для быстрых вопросов, не требующих сохранения в память."""
     logger.info(f"Эксперт 'FactChecker': Быстрый поиск по запросу: {query}")
     try:
-        search = TavilySearch(max_results=1)
+        # ИСПРАВЛЕНИЕ: Явно передаем API-ключ
+        search = TavilySearch(max_results=1, api_key=os.environ["TAVILY_API_KEY"])
         results = search.invoke(query)
-        # Tavily возвращает список словарей
         return results[0].get('content', 'Не удалось извлечь информацию.')
     except Exception as e:
         return f"Ошибка при быстром поиске: {e}"
 
 def create_document(input_str: str) -> str:
-    """Создает документ. Принимает строку 'текст|тип', например 'Привет|word'."""
     logger.info(f"Эксперт 'Secretary': Получена задача на создание документа.")
     try:
         parts = input_str.split('|')
@@ -100,11 +97,42 @@ def create_document(input_str: str) -> str:
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
             doc.save(temp_file.name)
             return f"Документ Word успешно создан: {temp_file.name}"
-        # Можно добавить Excel и PDF по аналогии
+        elif doc_type == 'excel':
+            wb = ExcelWorkbook()
+            ws = wb.active
+            for line in content.split('\n'):
+                ws.append(line.split(','))
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
+            wb.save(temp_file.name)
+            return f"Документ Excel успешно создан: {temp_file.name}"
+        elif doc_type == 'pdf':
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+            pdf.set_font('DejaVu', '', 12)
+            pdf.multi_cell(0, 10, content)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
+            pdf.output(temp_file.name)
+            return f"PDF документ успешно создан: {temp_file.name}"
         else:
-            return "Неподдерживаемый тип документа. Доступные типы: word."
+            return "Неподдерживаемый тип документа. Доступные типы: word, excel, pdf."
     except Exception as e:
         return f"Ошибка при создании документа: {e}"
+
+def analyze_and_update_memory(query: str) -> str:
+    logger.info("Эксперт 'Analyst': Начинаю анализ базы знаний.")
+    all_docs = main_db.get(include=["metadatas"])
+    if not all_docs or not all_docs.get('metadatas'):
+        return "База знаний пуста. Нечего анализировать."
+    topics = list(set([meta['source'].replace("Research on ", "") for meta in all_docs['metadatas'] if 'source' in meta]))
+    if not topics:
+        return "В базе знаний нет тем для анализа."
+    
+    planner_prompt = f"""Вот список тем в моей базе знаний: {", ".join(topics)}. Какая из этих тем наиболее вероятно могла устареть? Ответь только названием одной темы."""
+    topic_to_update = llm.invoke(planner_prompt).content.strip()
+    
+    logger.info(f"Аналитик решил обновить тему: {topic_to_update}")
+    return research_and_learn(topic_to_update)
 
 # --- 6. СОЗДАНИЕ ГЛАВНОГО АГЕНТА (РУКОВОДИТЕЛЯ) И ЕГО КОМАНДЫ ---
 print("Инициализация Главного Агента и его команды...")
@@ -126,6 +154,11 @@ main_tools = [
         description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым для вопросов о ранее исследованных темах."
     ),
     Tool(
+        name="KnowledgeAnalyst",
+        func=analyze_and_update_memory,
+        description="Используй, когда пользователь просит 'актуализируй знания' или 'обнови информацию'."
+    ),
+    Tool(
         name="Secretary",
         func=create_document,
         description="Используй для создания документов. Входные данные должны быть строкой в формате 'текст для документа|тип документа' (например, 'Привет, мир|word')."
@@ -138,6 +171,7 @@ system_prompt = """Ты — Главный Агент-Руководитель. 
 - `FactChecker`: Для быстрых фактов из интернета (погода, новости).
 - `DeepResearcher`: Для глубокого исследования и сохранения знаний по команде "исследуй".
 - `MemoryArchivist`: Для поиска в твоей базе знаний. Обращайся к нему первым для вопросов по исследованным темам.
+- `KnowledgeAnalyst`: Для анализа и обновления базы знаний по команде "обнови".
 - `Secretary`: Для создания документов по команде "создай документ".
 
 Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения. Получив ответ от эксперта, сформулируй финальный, дружелюбный ответ для пользователя.
@@ -178,7 +212,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['chat_history'] = result['chat_history']
 
         response_text = result["output"]
-        if response_text.startswith("Документ") and '.docx' in response_text:
+        if response_text.startswith("Документ") and ('.docx' in response_text or '.xlsx' in response_text or '.pdf' in response_text):
             try:
                 file_path = response_text.split(":")[-1].strip()
                 if os.path.exists(file_path):
