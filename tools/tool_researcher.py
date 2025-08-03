@@ -1,5 +1,6 @@
 # tools/tool_researcher.py
 import logging
+import os
 from langchain_tavily import TavilySearch
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.agents import Tool
@@ -10,7 +11,11 @@ logger = logging.getLogger(__name__)
 def research_and_learn(topic: str) -> str:
     """Глубоко исследует тему, создает саммари и сохраняет в память."""
     logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
-    search = TavilySearch(max_results=3)
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return "Ошибка: API-ключ для Tavily не найден на сервере."
+    
+    search = TavilySearch(max_results=3, api_key=api_key)
     try:
         search_results = search.invoke(topic)
         raw_text = "\n\n".join([result.get('content', '') for result in search_results])
