@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from core.config import llm
 from .tools import fact_checker_tools
 
-system_prompt = """Ты — Агент, Начальник отдела проверки фактов. Твоя задача — получить запрос и передать его своему единственному сотруднику `FactSearcher`."""
+system_prompt = """Ты — Агент, Начальник отдела проверки фактов. Твоя задача — получить запрос и передать его своему единственному, универсальному сотруднику `InternetFactSearcher`."""
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
