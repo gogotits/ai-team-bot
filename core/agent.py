@@ -8,16 +8,13 @@ from core.config import llm
 from tools.tool_researcher import researcher_tool
 from tools.tool_archivist import archivist_tool
 from tools.tool_secretary import secretary_tool
-# Импортируем нашего "начальника отдела"
 from tools.fact_checker_department.agent import fact_checker_agent_executor
 
 print("Инициализация Главного Агента и его команды...")
 
-# Собираем команду экспертов (начальников отделов)
 main_tools = [
     Tool(
         name="FactCheckerDepartment",
-        # ИСПРАВЛЕНИЕ: Мы "упаковываем" текстовый запрос в словарь, который ожидает агент
         func=lambda user_input_str: fact_checker_agent_executor.invoke({"input": user_input_str}),
         description="Используй этот отдел для получения быстрых, фактических ответов на вопросы о мире (погода, новости, столицы, курсы валют и т.д.)."
     ),
@@ -26,7 +23,6 @@ main_tools = [
     secretary_tool,
 ]
 
-# Промпт для Главного Агента
 system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
 
 Твоя команда:
@@ -45,7 +41,6 @@ prompt = ChatPromptTemplate.from_messages([
     MessagesPlaceholder("agent_scratchpad"),
 ])
 
-# Создаем Главного Агента и его Исполнителя
 agent = create_tool_calling_agent(llm, main_tools, prompt)
 memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
 agent_executor = AgentExecutor(

@@ -9,7 +9,6 @@ from fpdf import FPDF
 logger = logging.getLogger(__name__)
 
 def create_document(input_str: str) -> str:
-    """Создает документ. Принимает строку 'текст|тип', например 'Привет|word'."""
     logger.info(f"Эксперт 'Secretary': Получена задача на создание документа.")
     try:
         parts = input_str.split('|')
