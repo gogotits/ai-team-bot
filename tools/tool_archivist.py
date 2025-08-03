@@ -1,12 +1,11 @@
 # tools/tool_archivist.py
 import logging
 from langchain.agents import Tool
-from core.config import retriever # Импортируем общие объекты
+from core.config import retriever
 
 logger = logging.getLogger(__name__)
 
 def retrieve_from_memory(query: str) -> str:
-    """Ищет ответ на запрос в долгосрочной памяти."""
     logger.info(f"Эксперт 'MemoryArchivist': Поиск в памяти по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:

@@ -7,7 +7,7 @@ from langchain_chroma import Chroma
 # Загружаем переменные окружения
 load_dotenv()
 if not all(key in os.environ for key in ["GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TAVILY_API_KEY"]):
-    raise ValueError("Один или несколько ключей API не найдены в .env файле!")
+    raise ValueError("Один или несколько ключей API не найдены в .env файле или на сервере!")
 print("✅ Все ключи API загружены.")
 
 # Инициализируем компоненты один раз, чтобы использовать во всем проекте

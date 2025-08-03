@@ -4,16 +4,14 @@ import os
 from langchain_tavily import TavilySearch
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.agents import Tool
-from core.config import llm, db # Импортируем общие объекты
+from core.config import llm, db
 
 logger = logging.getLogger(__name__)
 
 def research_and_learn(topic: str) -> str:
-    """Глубоко исследует тему, создает саммари и сохраняет в память."""
     logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
     api_key = os.environ.get("TAVILY_API_KEY")
-    if not api_key:
-        return "Ошибка: API-ключ для Tavily не найден на сервере."
+    if not api_key: return "Ошибка: API-ключ для Tavily не найден на сервере."
     
     search = TavilySearch(max_results=3, api_key=api_key)
     try:
@@ -21,7 +19,7 @@ def research_and_learn(topic: str) -> str:
         raw_text = "\n\n".join([result.get('content', '') for result in search_results])
         if not raw_text.strip(): return "Поиск в интернете не дал результатов."
         
-        summarizer_prompt = f"""Проанализируй текст по теме '{topic}'. Создай качественное саммари на русском языке. Ответ должен содержать только саммари."""
+        summarizer_prompt = f"""Проанализируй текст по теме '{topic}'. Создай качественное саммари. Ответ должен содержать только саммари."""
         summary = llm.invoke(summarizer_prompt).content
         
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)

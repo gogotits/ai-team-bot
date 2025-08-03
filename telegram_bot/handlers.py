@@ -5,17 +5,14 @@ import base64
 from telegram import Update
 from telegram.ext import ContextTypes
 from langchain_core.messages import HumanMessage
-from core.agent import agent_executor # Импортируем нашего главного агента
-from core.config import llm # Импортируем LLM для фото
+from core.agent import agent_executor
+from core.config import llm
 
 logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Очищаем историю чата
-    if 'chat_history' in context.user_data:
-        del context.user_data['chat_history']
     agent_executor.memory.clear()
-    await update.message.reply_text('Привет! Я ваш ИИ-ассистент с командой экспертов. О чем поговорим сегодня?')
+    await update.message.reply_text('Привет! Я ваш ИИ-ассистент с командой экспертов. Память очищена.')
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_query = update.message.text
@@ -23,7 +20,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text('Приступаю к выполнению задачи... Обращаюсь к команде экспертов.')
     
     try:
-        # Теперь мы не управляем историей вручную, агент делает это сам
         result = agent_executor.invoke({"input": user_query})
         
         response_text = result["output"]

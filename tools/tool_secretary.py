@@ -47,5 +47,5 @@ def create_document(input_str: str) -> str:
 secretary_tool = Tool(
     name="Secretary",
     func=create_document,
-    description="Используй для создания документов. Входные данные должны быть строкой в формате 'текст для документа|тип документа'."
+    description="Используй для создания документов. Входные данные: 'текст|тип документа'."
 )

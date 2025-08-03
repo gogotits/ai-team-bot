@@ -5,11 +5,9 @@ from core.config import llm
 from .tools import fact_checker_tools
 
 system_prompt = """Ты — Агент, Начальник отдела проверки фактов. Твоя задача — получить запрос и делегировать его одному из твоих подчиненных специалистов.
-
 Твои специалисты:
 - `WeatherTool`: Специалист по погоде.
 - `GeneralSearch`: Специалист по всем остальным вопросам.
-
 Проанализируй запрос и выбери ОДНОГО специалиста для выполнения задачи.
 """
 prompt = ChatPromptTemplate.from_messages([
