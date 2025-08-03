@@ -80,34 +80,58 @@ def quick_internet_search(query: str) -> str:
     except Exception as e:
         return f"Ошибка при быстром поиске: {e}"
 
-def create_word_document(content: str) -> str:
-    """Создает документ Word (.docx)."""
-    doc = WordDocument()
-    doc.add_paragraph(content)
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
-    doc.save(temp_file.name)
-    return f"Документ Word успешно создан: {temp_file.name}"
+def create_document(input_str: str) -> str:
+    """Создает документ. Принимает строку 'текст|тип', например 'Привет|word'."""
+    logger.info(f"Эксперт 'Secretary': Получена задача на создание документа.")
+    try:
+        parts = input_str.split('|')
+        if len(parts) != 2:
+            return "Ошибка: неверный формат для создания документа. Используйте 'текст|тип документа'."
+        content, doc_type = parts[0].strip(), parts[1].strip().lower()
 
-def create_excel_document(content: str) -> str:
-    """Создает документ Excel (.xlsx)."""
-    wb = ExcelWorkbook()
-    ws = wb.active
-    for line in content.split('\n'):
-        ws.append(line.split(','))
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
-    wb.save(temp_file.name)
-    return f"Документ Excel успешно создан: {temp_file.name}"
+        if doc_type == 'word':
+            doc = WordDocument()
+            doc.add_paragraph(content)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
+            doc.save(temp_file.name)
+            return f"Документ Word успешно создан: {temp_file.name}"
+        elif doc_type == 'excel':
+            wb = ExcelWorkbook()
+            ws = wb.active
+            for line in content.split('\n'):
+                ws.append(line.split(','))
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
+            wb.save(temp_file.name)
+            return f"Документ Excel успешно создан: {temp_file.name}"
+        elif doc_type == 'pdf':
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+            pdf.set_font('DejaVu', '', 12)
+            pdf.multi_cell(0, 10, content)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
+            pdf.output(temp_file.name)
+            return f"PDF документ успешно создан: {temp_file.name}"
+        else:
+            return "Неподдерживаемый тип документа. Доступные типы: word, excel, pdf."
+    except Exception as e:
+        return f"Ошибка при создании документа: {e}"
 
-def create_pdf_document(content: str) -> str:
-    """Создает документ PDF (.pdf)."""
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
-    pdf.set_font('DejaVu', '', 12)
-    pdf.multi_cell(0, 10, content)
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
-    pdf.output(temp_file.name)
-    return f"PDF документ успешно создан: {temp_file.name}"
+def analyze_and_update_memory(query: str) -> str:
+    """Анализирует базу знаний и обновляет устаревшую информацию."""
+    logger.info("Эксперт 'Analyst': Начинаю анализ базы знаний.")
+    all_docs = main_db.get(include=["metadatas"])
+    if not all_docs or not all_docs.get('metadatas'):
+        return "База знаний пуста. Нечего анализировать."
+    topics = list(set([meta['source'].replace("Research on ", "") for meta in all_docs['metadatas'] if 'source' in meta]))
+    if not topics:
+        return "В базе знаний нет тем для анализа."
+    
+    planner_prompt = f"""Вот список тем в моей базе знаний: {", ".join(topics)}. Какая из них наиболее вероятно могла устареть? Ответь только названием одной темы."""
+    topic_to_update = llm.invoke(planner_prompt).content.strip()
+    
+    logger.info(f"Аналитик решил обновить тему: {topic_to_update}")
+    return research_and_learn(topic_to_update)
 
 # --- 6. СОЗДАНИЕ ГЛАВНОГО АГЕНТА (РУКОВОДИТЕЛЯ) И ЕГО КОМАНДЫ ---
 print("Инициализация Главного Агента и его команды...")
@@ -116,44 +140,40 @@ main_tools = [
     Tool(
         name="FactChecker",
         func=quick_internet_search,
-        description="Используй для быстрых, фактических вопросов о мире (погода, новости, столицы, курсы валют и т.д.), которые не нужно сохранять."
+        description="Используй для быстрых, фактических вопросов о мире (погода, новости, курсы валют). Вызывается командой 'посмотри в интернете'."
     ),
     Tool(
         name="DeepResearcher",
         func=research_and_learn,
-        description="Используй, когда пользователь прямо просит 'исследуй', 'найди и сохрани', чтобы найти и сохранить в память обширную информацию по сложной теме."
+        description="Используй для глубокого исследования и сохранения знаний. Вызывается командой 'исследуй'."
     ),
     Tool(
         name="MemoryArchivist",
         func=retrieve_from_memory,
-        description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым для вопросов о ранее исследованных темах."
+        description="Используй для поиска информации в своей долгосрочной памяти. Вызывается командой 'предоставь информацию из памяти'."
     ),
     Tool(
-        name="CreateWordDocument",
-        func=create_word_document,
-        description="Используй для создания документа Microsoft Word (.docx)."
+        name="KnowledgeAnalyst",
+        func=analyze_and_update_memory,
+        description="Используй для анализа и обновления базы знаний. Вызывается командой 'актуализируй'."
     ),
     Tool(
-        name="CreateExcelDocument",
-        func=create_excel_document,
-        description="Используй для создания документа Microsoft Excel (.xlsx)."
-    ),
-    Tool(
-        name="CreatePdfDocument",
-        func=create_pdf_document,
-        description="Используй для создания PDF документа (.pdf)."
+        name="Secretary",
+        func=create_document,
+        description="Используй для создания документов. Вызывается командой 'создай документ'."
     ),
 ]
 
 system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
 
 Твоя команда:
-- `FactChecker`: Для быстрых фактов из интернета (погода, новости). Не сохраняет в память.
-- `DeepResearcher`: Для глубокого исследования и сохранения знаний по команде "исследуй".
-- `MemoryArchivist`: Для поиска в твоей базе знаний. Обращайся к нему первым для вопросов по исследованным темам.
-- `CreateWordDocument`, `CreateExcelDocument`, `CreatePdfDocument`: Для создания документов.
+- `FactChecker`: Для быстрых фактов из интернета. Команда: "посмотри в интернете".
+- `DeepResearcher`: Для глубокого исследования и сохранения знаний. Команда: "исследуй".
+- `MemoryArchivist`: Для поиска в твоей базе знаний. Команда: "предоставь информацию из памяти".
+- `KnowledgeAnalyst`: Для анализа и обновления базы знаний. Команда: "актуализируй".
+- `Secretary`: Для создания документов. Команда: "создай документ".
 
-Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения. Получив ответ от эксперта, сформулируй финальный, дружелюбный ответ для пользователя.
+Твоя задача — проанализировать запрос пользователя, определить ключевую команду и выбрать ОДНОГО наиболее подходящего эксперта. Затем передай ему оставшуюся часть запроса как задачу.
 """
 
 prompt = ChatPromptTemplate.from_messages([
