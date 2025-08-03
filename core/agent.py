@@ -8,7 +8,7 @@ from core.config import llm
 from tools.tool_researcher import researcher_tool
 from tools.tool_archivist import archivist_tool
 from tools.tool_secretary import secretary_tool
-# Импортируем нашего нового "начальника отдела"
+# Импортируем нашего "начальника отдела"
 from tools.fact_checker_department.agent import fact_checker_agent_executor
 
 print("Инициализация Главного Агента и его команды...")
@@ -17,7 +17,8 @@ print("Инициализация Главного Агента и его ком
 main_tools = [
     Tool(
         name="FactCheckerDepartment",
-        func=fact_checker_agent_executor.invoke,
+        # ИСПРАВЛЕНИЕ: Мы "упаковываем" текстовый запрос в словарь, который ожидает агент
+        func=lambda user_input_str: fact_checker_agent_executor.invoke({"input": user_input_str}),
         description="Используй этот отдел для получения быстрых, фактических ответов на вопросы о мире (погода, новости, столицы, курсы валют и т.д.)."
     ),
     researcher_tool,
