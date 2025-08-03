@@ -1,8 +1,9 @@
 # tools/fact_checker_department/tools.py
 import os
 import logging
-from langchain_tavily import TavilySearch
 from langchain.agents import Tool
+# ИСПРАВЛЕНИЕ: Импортируем прямую библиотеку Tavily
+from tavily import TavilyClient
 
 logger = logging.getLogger(__name__)
 
@@ -15,37 +16,29 @@ def get_fact(query: str) -> str:
     
     logger.info(f"Сотрудник 'FactSearcher': Ищу факт по запросу: '{query}'")
     try:
-        search = TavilySearch(max_results=1, api_key=TAVILY_API_KEY)
-        # Выполняем поиск
-        results_data = search.invoke(query)
+        # ИСПРАВЛЕНИЕ: Используем прямой клиент TavilyClient
+        client = TavilyClient(api_key=TAVILY_API_KEY)
+        response_dict = client.search(query=query, search_depth="basic")
         
-        logger.info(f"Получен ответ от Tavily: {results_data}")
+        logger.info(f"Получен сырой ответ от Tavily: {response_dict}")
 
-        # --- НАДЕЖНАЯ ЛОГИКА ОБРАБОТКИ ОТВЕТА ---
-        if not results_data:
+        if not response_dict:
             return "Поиск в интернете не дал результатов."
 
-        # Проверяем, это список словарей (стандартный ответ)
-        if isinstance(results_data, list) and results_data and isinstance(results_data[0], dict):
-            first_result = results_data[0]
-            answer = first_result.get('answer')
-            if answer:
-                return answer
-            return first_result.get('content', 'Не удалось извлечь контент из результата.')
-        
-        # Проверяем, это список строк (иногда бывает в старых версиях)
-        elif isinstance(results_data, list) and results_data and isinstance(results_data[0], str):
-            return results_data[0]
-            
-        else:
-            logger.warning(f"Получен неизвестный формат от Tavily: {results_data}")
-            return "Получен неожиданный формат ответа от поисковой системы."
+        # Теперь мы знаем точную структуру и можем ее надежно обработать
+        results_list = response_dict.get('results', [])
+        if not results_list:
+            direct_answer = response_dict.get('answer')
+            if direct_answer: return direct_answer
+            return "Поиск не дал конкретных результатов."
+
+        first_result = results_list[0]
+        return first_result.get('content', 'Не удалось извлечь контент из результата.')
 
     except Exception as e:
         logger.error(f"Критическая ошибка в FactSearcher: {e}", exc_info=True)
         return f"Произошла критическая ошибка при поиске факта: {e}"
 
-# У нас один, универсальный сотрудник в отделе фактов
 fact_checker_tool = Tool(
     name="InternetFactSearcher",
     func=get_fact,
