@@ -43,11 +43,10 @@ main_db = Chroma(persist_directory=persistent_storage_path, embedding_function=e
 retriever = main_db.as_retriever(search_kwargs={'k': 5})
 print(f"✅ Единая база знаний готова. Записей в базе: {main_db._collection.count()}")
 
-# --- 5. СОЗДАНИЕ АГЕНТОВ-ЭКСПЕРТОВ (Вспомогательных) ---
+# --- 5. ФУНКЦИИ-ИНСТРУМЕНТЫ ДЛЯ ЭКСПЕРТОВ ---
 
-# 5.1 Эксперт: Исследователь (ищет и сохраняет)
 def research_and_learn(topic: str) -> str:
-    logger.info(f"Эксперт 'Researcher': Начинаю исследование по теме: {topic}")
+    logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
     search = TavilySearch(max_results=3)
     try:
         search_results = search.invoke(topic)
@@ -59,64 +58,64 @@ def research_and_learn(topic: str) -> str:
         main_db.add_documents(texts)
         return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
     except Exception as e:
-        return f"Ошибка в работе Исследователя: {e}"
+        logger.error(f"Ошибка в работе 'DeepResearcher': {e}", exc_info=True)
+        return f"В процессе исследования произошла ошибка: {e}"
 
-# 5.2 Эксперт: Помощник (быстрый поиск в интернете)
-quick_search_tool = TavilySearch(max_results=3)
-
-# 5.3 Эксперт: Архивариус (поиск в памяти)
 def retrieve_from_memory(query: str) -> str:
-    logger.info(f"Эксперт 'Archivist': Поиск в памяти по запросу: {query}")
+    logger.info(f"Эксперт 'MemoryArchivist': Поиск в памяти по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
         return "В моей базе знаний нет информации по этому вопросу."
     return "\n".join([doc.page_content for doc in docs])
 
-# 5.4 Эксперт: Секретарь (создание документов)
-def create_document(content: str, doc_type: str) -> str:
-    logger.info(f"Эксперт 'Secretary': Создаю документ типа {doc_type}")
+def quick_internet_search(query: str) -> str:
+    logger.info(f"Эксперт 'FactChecker': Быстрый поиск по запросу: {query}")
     try:
-        if doc_type.lower() == 'word':
-            doc = WordDocument()
-            doc.add_paragraph(content)
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
-            doc.save(temp_file.name)
-            return f"Документ Word успешно создан: {temp_file.name}"
-        # Можно добавить Excel и PDF по аналогии
-        else:
-            return "Неподдерживаемый тип документа."
+        search = TavilySearch(max_results=1)
+        results = search.invoke(query)
+        return results[0].get('content', 'Не удалось извлечь информацию.')
     except Exception as e:
-        return f"Ошибка при создании документа: {e}"
+        return f"Ошибка при быстром поиске: {e}"
 
-# 5.5 Эксперт: Аналитик (анализ и обновление знаний)
-def analyze_and_update_memory(query: str) -> str:
-    logger.info("Эксперт 'Analyst': Начинаю анализ базы знаний.")
-    all_docs = main_db.get(include=["metadatas"])
-    if not all_docs or not all_docs.get('metadatas'):
-        return "База знаний пуста. Нечего анализировать."
-    topics = list(set([meta['source'].replace("Research on ", "") for meta in all_docs['metadatas'] if 'source' in meta]))
-    if not topics:
-        return "В базе знаний нет тем для анализа."
-    
-    planner_prompt = f"""Вот список тем в моей базе знаний: {", ".join(topics)}. Какая из них наиболее вероятно могла устареть? Ответь только названием одной темы."""
-    topic_to_update = llm.invoke(planner_prompt).content.strip()
-    
-    logger.info(f"Аналитик решил обновить тему: {topic_to_update}")
-    return research_and_learn(topic_to_update)
+def create_word_document(content: str) -> str:
+    doc = WordDocument()
+    doc.add_paragraph(content)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
+    doc.save(temp_file.name)
+    return f"Документ Word успешно создан: {temp_file.name}"
 
-# --- 6. СОЗДАНИЕ ГЛАВНОГО АГЕНТА (Руководителя) ---
+def create_excel_document(content: str) -> str:
+    wb = ExcelWorkbook()
+    ws = wb.active
+    for line in content.split('\n'):
+        ws.append(line.split(','))
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
+    wb.save(temp_file.name)
+    return f"Документ Excel успешно создан: {temp_file.name}"
+
+def create_pdf_document(content: str) -> str:
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+    pdf.set_font('DejaVu', '', 12)
+    pdf.multi_cell(0, 10, content)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
+    pdf.output(temp_file.name)
+    return f"PDF документ успешно создан: {temp_file.name}"
+
+# --- 6. СОЗДАНИЕ ГЛАВНОГО АГЕНТА (РУКОВОДИТЕЛЯ) И ЕГО КОМАНДЫ ---
 print("Инициализация Главного Агента и его команды...")
 
 main_tools = [
     Tool(
-        name="QuickInternetSearch",
-        func=quick_search_tool.invoke,
-        description="Используй для быстрых, фактических вопросов о мире (погода, новости, столицы и т.д.), которые не нужно сохранять."
+        name="FactChecker",
+        func=quick_internet_search,
+        description="Используй для быстрых, фактических вопросов о мире (погода, новости, столицы, курсы валют и т.д.), которые не нужно сохранять."
     ),
     Tool(
         name="DeepResearcher",
         func=research_and_learn,
-        description="Используй, когда пользователь прямо просит 'исследуй', 'найди и сохрани', чтобы найти и сохранить в память обширную информацию."
+        description="Используй, когда пользователь прямо просит 'исследуй', 'найди и сохрани', чтобы найти и сохранить в память обширную информацию по сложной теме."
     ),
     Tool(
         name="MemoryArchivist",
@@ -124,27 +123,31 @@ main_tools = [
         description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым для вопросов о ранее исследованных темах."
     ),
     Tool(
-        name="KnowledgeAnalyst",
-        func=analyze_and_update_memory,
-        description="Используй, когда пользователь просит 'актуализируй знания' или 'обнови информацию'."
+        name="CreateWordDocument",
+        func=create_word_document,
+        description="Используй для создания документа Microsoft Word (.docx)."
     ),
     Tool(
-        name="Secretary",
-        func=lambda input_str: create_document(content=input_str.split('|')[0], doc_type=input_str.split('|')[1]),
-        description="Используй для создания документов. Входные данные должны быть строкой в формате 'текст для документа|тип документа' (например, 'Привет, мир|word')."
+        name="CreateExcelDocument",
+        func=create_excel_document,
+        description="Используй для создания документа Microsoft Excel (.xlsx)."
+    ),
+    Tool(
+        name="CreatePdfDocument",
+        func=create_pdf_document,
+        description="Используй для создания PDF документа (.pdf)."
     ),
 ]
 
 system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
 
 Твоя команда:
-- `QuickInternetSearch`: Для быстрых фактов (погода, новости).
+- `FactChecker`: Для быстрых фактов из интернета (погода, новости). Не сохраняет в память.
 - `DeepResearcher`: Для глубокого исследования и сохранения знаний по команде "исследуй".
-- `MemoryArchivist`: Для поиска в твоей базе знаний. Используй его первым для вопросов по исследованным темам.
-- `KnowledgeAnalyst`: Для анализа и обновления базы знаний по команде "обнови".
-- `Secretary`: Для создания документов по команде "создай документ".
+- `MemoryArchivist`: Для поиска в твоей базе знаний. Обращайся к нему первым для вопросов по исследованным темам.
+- `CreateWordDocument`, `CreateExcelDocument`, `CreatePdfDocument`: Для создания документов.
 
-Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения.
+Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения. Получив ответ от эксперта, сформулируй финальный, дружелюбный ответ для пользователя.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -182,7 +185,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['chat_history'] = result['chat_history']
 
         response_text = result["output"]
-        if response_text.startswith("Документ") and '.docx' in response_text:
+        if response_text.startswith("Документ") and ('.docx' in response_text or '.xlsx' in response_text or '.pdf' in response_text):
             try:
                 file_path = response_text.split(":")[-1].strip()
                 if os.path.exists(file_path):
