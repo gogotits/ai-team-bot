@@ -4,6 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferWindowMemory
 from core.config import llm
 
+# Импортируем всех наших экспертов и отделы
 from tools.tool_researcher import researcher_tool
 from tools.tool_archivist import archivist_tool
 from tools.tool_secretary import secretary_tool
@@ -15,20 +16,23 @@ main_tools = [
     Tool(
         name="FactCheckerDepartment",
         func=lambda user_input_str: fact_checker_agent_executor.invoke({"input": user_input_str}),
-        description="Используй этот отдел для получения быстрых, фактических ответов о мире (погода, новости, столицы)."
+        description="Используй этот отдел для получения быстрых, фактических ответов на вопросы о мире (погода, новости, столицы, курсы валют и т.д.)."
     ),
     researcher_tool,
     archivist_tool,
     secretary_tool,
 ]
 
-system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
+# Промпт для Главного Агента
+system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов). Ты НЕ должен отвечать на вопросы сам, используя свои базовые знания. Твоя работа — быть менеджером.
+
 Твоя команда:
-- `FactCheckerDepartment`: Отдел быстрых фактов.
-- `DeepResearcher`: Отдел глубоких исследований и сохранения знаний.
-- `MemoryArchivist`: Отдел по работе с базой знаний.
-- `Secretary`: Отдел по созданию документов.
-Пойми цель пользователя и выбери ОДИН наиболее подходящий отдел для ее выполнения.
+- `FactCheckerDepartment`: Отдел быстрых фактов (погода, новости). Вызывай его для любых вопросов о реальном мире, если не нужна глубокая аналитика.
+- `DeepResearcher`: Отдел глубоких исследований и сохранения знаний. Вызывай его ТОЛЬКО по команде "исследуй".
+- `MemoryArchivist`: Отдел по работе с базой знаний. Обращайся к нему первым, если вопрос касается ранее исследованных тем.
+- `Secretary`: Отдел по созданию документов. Вызывай его ТОЛЬКО по команде "создай документ".
+
+Проанализируй запрос. Если он похож на запрос о факте (погода, столица), не раздумывая, вызывай `FactCheckerDepartment`.
 """
 
 prompt = ChatPromptTemplate.from_messages([

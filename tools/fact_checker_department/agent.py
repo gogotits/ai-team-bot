@@ -4,12 +4,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from core.config import llm
 from .tools import fact_checker_tools
 
-system_prompt = """Ты — Агент, Начальник отдела проверки фактов. Твоя задача — получить запрос и делегировать его одному из твоих подчиненных специалистов.
-Твои специалисты:
-- `WeatherTool`: Специалист по погоде.
-- `GeneralSearch`: Специалист по всем остальным вопросам.
-Проанализируй запрос и выбери ОДНОГО специалиста для выполнения задачи.
-"""
+system_prompt = """Ты — Агент, Начальник отдела проверки фактов. Твоя задача — получить запрос и передать его своему единственному сотруднику `FactSearcher`."""
+
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
     ("human", "{input}"),
