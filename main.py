@@ -2,7 +2,6 @@
 import os
 import logging
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-# Убедимся, что config импортируется первым для загрузки .env
 import core.config
 from telegram_bot.handlers import start, handle_text_message, handle_photo_message
 

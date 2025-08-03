@@ -19,7 +19,7 @@ def create_document(input_str: str) -> str:
         if doc_type == 'word':
             doc = WordDocument()
             doc.add_paragraph(content)
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
             doc.save(temp_file.name)
             return f"Документ Word успешно создан: {temp_file.name}"
         elif doc_type == 'excel':
@@ -27,7 +27,7 @@ def create_document(input_str: str) -> str:
             ws = wb.active
             for line in content.split('\n'):
                 ws.append(line.split(','))
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx", prefix="table_")
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
             wb.save(temp_file.name)
             return f"Документ Excel успешно создан: {temp_file.name}"
         elif doc_type == 'pdf':
@@ -36,11 +36,11 @@ def create_document(input_str: str) -> str:
             pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
             pdf.set_font('DejaVu', '', 12)
             pdf.multi_cell(0, 10, content)
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="document_")
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
             pdf.output(temp_file.name)
             return f"PDF документ успешно создан: {temp_file.name}"
         else:
-            return "Неподдерживаемый тип документа. Доступные типы: word, excel, pdf."
+            return "Неподдерживаемый тип документа."
     except Exception as e:
         return f"Ошибка при создании документа: {e}"
 

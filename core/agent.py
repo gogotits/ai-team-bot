@@ -4,35 +4,33 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferWindowMemory
 from core.config import llm
 
-# Импортируем всех наших экспертов НАПРЯМУЮ
+# Импортируем всех наших экспертов
 from tools.tool_researcher import researcher_tool
 from tools.tool_archivist import archivist_tool
 from tools.tool_secretary import secretary_tool
-# ИСПРАВЛЕНИЕ: Импортируем не "отдел", а самого "сотрудника"
-from tools.fact_checker_department.tools import fact_checker_tool
+from tools.fact_checker_department.agent import fact_checker_agent_executor
 
 print("Инициализация Главного Агента и его команды...")
 
-# Собираем команду из ПРЯМЫХ исполнителей
 main_tools = [
-    fact_checker_tool, # <-- Теперь это прямой инструмент
+    Tool(
+        name="FactCheckerDepartment",
+        func=lambda user_input_str: fact_checker_agent_executor.invoke({"input": user_input_str}),
+        description="Используй для получения быстрых, фактических ответов о мире (погода, новости, столицы)."
+    ),
     researcher_tool,
     archivist_tool,
     secretary_tool,
 ]
 
-# Промпт для Главного Агента
 system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
-
 Твоя команда:
-- `FactSearcher`: Эксперт по быстрым фактам из интернета (погода, новости).
-- `DeepResearcher`: Эксперт по глубокому исследованию и сохранению знаний.
-- `MemoryArchivist`: Эксперт по работе с базой знаний.
-- `Secretary`: Эксперт по созданию документов.
-
-Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения.
+- `FactCheckerDepartment`: Отдел быстрых фактов.
+- `DeepResearcher`: Отдел глубоких исследований и сохранения знаний.
+- `MemoryArchivist`: Отдел по работе с базой знаний.
+- `Secretary`: Отдел по созданию документов.
+Пойми цель пользователя и выбери ОДИН наиболее подходящий отдел.
 """
-
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
     MessagesPlaceholder("chat_history"),
@@ -40,7 +38,6 @@ prompt = ChatPromptTemplate.from_messages([
     MessagesPlaceholder("agent_scratchpad"),
 ])
 
-# Создаем Главного Агента и его Исполнителя
 agent = create_tool_calling_agent(llm, main_tools, prompt)
 memory = ConversationBufferWindowMemory(k=10, memory_key="chat_history", return_messages=True)
 agent_executor = AgentExecutor(
@@ -50,4 +47,4 @@ agent_executor = AgentExecutor(
     verbose=True,
     handle_parsing_errors=True
 )
-print("✅ Главный Агент (Руководитель) и его команда готовы к работе.")
+print("✅ Главный Агент (Руководитель) готов к работе.")

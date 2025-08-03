@@ -1,29 +1,25 @@
 # tools/tool_researcher.py
 import logging
 import os
+from langchain_tavily import TavilySearch
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.agents import Tool
 from core.config import llm, db
-# ИСПРАВЛЕНИЕ: Импортируем прямую библиотеку Tavily
-from tavily import TavilyClient
 
 logger = logging.getLogger(__name__)
 
 def research_and_learn(topic: str) -> str:
     logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
     api_key = os.environ.get("TAVILY_API_KEY")
-    if not api_key: return "Ошибка: API-ключ для Tavily не найден на сервере."
+    if not api_key: return "Ошибка: API-ключ для Tavily не найден."
     
+    search = TavilySearch(max_results=3, api_key=api_key)
     try:
-        # ИСПРАВЛЕНИЕ: Используем прямой клиент TavilyClient
-        client = TavilyClient(api_key=api_key)
-        search_results = client.search(query=topic, search_depth="advanced").get('results', [])
-        
-        if not search_results: return "Поиск в интернете не дал результатов."
-
+        search_results = search.invoke(topic)
         raw_text = "\n\n".join([result.get('content', '') for result in search_results])
+        if not raw_text.strip(): return "Поиск в интернете не дал результатов."
         
-        summarizer_prompt = f"""Проанализируй текст по теме '{topic}'. Создай качественное саммари. Ответ должен содержать только саммари."""
+        summarizer_prompt = f"Создай качественное саммари на русском языке по теме '{topic}', основываясь на тексте: {raw_text}"
         summary = llm.invoke(summarizer_prompt).content
         
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
@@ -32,11 +28,10 @@ def research_and_learn(topic: str) -> str:
         
         return f"Информация по теме '{topic}' была успешно исследована и сохранена в моей памяти."
     except Exception as e:
-        logger.error(f"Ошибка в работе 'DeepResearcher': {e}", exc_info=True)
         return f"В процессе исследования произошла ошибка: {e}"
 
 researcher_tool = Tool(
     name="DeepResearcher",
     func=research_and_learn,
-    description="Используй, когда пользователь прямо просит 'исследуй', 'найди и сохрани', чтобы найти и сохранить в память обширную информацию по сложной теме."
+    description="Используй, когда пользователь прямо просит 'исследуй' или 'найди и сохрани'."
 )

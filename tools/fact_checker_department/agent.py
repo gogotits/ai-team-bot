@@ -5,13 +5,11 @@ from core.config import llm
 from .tools import fact_checker_tools
 
 system_prompt = """Ты — Агент, Начальник отдела проверки фактов. Твоя задача — получить запрос и передать его своему единственному, универсальному сотруднику `InternetFactSearcher`."""
-
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
     ("human", "{input}"),
     MessagesPlaceholder("agent_scratchpad"),
 ])
-
 fact_checker_agent_runnable = create_tool_calling_agent(llm, fact_checker_tools, prompt)
 fact_checker_agent_executor = AgentExecutor(
     agent=fact_checker_agent_runnable, 

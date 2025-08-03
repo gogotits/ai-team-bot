@@ -15,5 +15,5 @@ def retrieve_from_memory(query: str) -> str:
 archivist_tool = Tool(
     name="MemoryArchivist",
     func=retrieve_from_memory,
-    description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым для вопросов о ранее исследованных темах."
+    description="Используй, чтобы найти ответ на вопрос в своей долгосрочной памяти. Всегда пробуй этот инструмент первым."
 )
