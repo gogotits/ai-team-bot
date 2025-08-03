@@ -1,44 +1,49 @@
 # tools/fact_checker_department/tools.py
 import os
 import logging
+from langchain_tavily import TavilySearch
 from langchain.agents import Tool
-# ИСПРАВЛЕНИЕ: Импортируем прямую библиотеку Tavily
-from tavily import TavilyClient
+# Импортируем нашу основную LLM, чтобы сотрудник мог думать
+from core.config import llm
 
 logger = logging.getLogger(__name__)
 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 def get_fact(query: str) -> str:
-    """Универсальная и надежная функция для поиска фактов в интернете."""
+    """Универсальная и надежная функция для поиска и анализа фактов."""
     if not TAVILY_API_KEY: 
         return "Ошибка: API-ключ для Tavily не найден на сервере."
     
     logger.info(f"Сотрудник 'FactSearcher': Ищу факт по запросу: '{query}'")
     try:
-        # ИСПРАВЛЕНИЕ: Используем прямой клиент TavilyClient
-        client = TavilyClient(api_key=TAVILY_API_KEY)
-        response_dict = client.search(query=query, search_depth="basic")
+        search = TavilySearch(max_results=1, api_key=TAVILY_API_KEY)
+        results = search.invoke(query)
         
-        logger.info(f"Получен сырой ответ от Tavily: {response_dict}")
-
-        if not response_dict:
+        if not results or not isinstance(results, list) or not results[0]:
             return "Поиск в интернете не дал результатов."
 
-        # Теперь мы знаем точную структуру и можем ее надежно обработать
-        results_list = response_dict.get('results', [])
-        if not results_list:
-            direct_answer = response_dict.get('answer')
-            if direct_answer: return direct_answer
-            return "Поиск не дал конкретных результатов."
+        raw_content = results[0].get('content', '')
+        if not raw_content:
+            return "Не удалось извлечь контент из результата поиска."
 
-        first_result = results_list[0]
-        return first_result.get('content', 'Не удалось извлечь контент из результата.')
+        # ШАГ АНАЛИЗА: Просим LLM извлечь суть из найденного текста
+        analysis_prompt = f"""Проанализируй следующий текст, найденный в интернете, и дай краткий и точный ответ на вопрос пользователя.
+        Вопрос пользователя: "{query}"
+        Найденный текст: "{raw_content}"
+        
+        Твой финальный ответ должен быть только сутью, без лишних фраз.
+        """
+        
+        clean_answer = llm.invoke(analysis_prompt).content
+        logger.info(f"Сотрудник 'FactSearcher': Сформулирован чистый ответ: {clean_answer}")
+        return clean_answer
 
     except Exception as e:
         logger.error(f"Критическая ошибка в FactSearcher: {e}", exc_info=True)
         return f"Произошла критическая ошибка при поиске факта: {e}"
 
+# У нас один, универсальный сотрудник в отделе фактов
 fact_checker_tool = Tool(
     name="InternetFactSearcher",
     func=get_fact,
