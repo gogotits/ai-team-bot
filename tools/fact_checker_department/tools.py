@@ -9,32 +9,43 @@ logger = logging.getLogger(__name__)
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 def get_fact(query: str) -> str:
-    """Универсальная функция для поиска фактов, включая погоду."""
+    """Универсальная и надежная функция для поиска фактов в интернете."""
     if not TAVILY_API_KEY: 
         return "Ошибка: API-ключ для Tavily не найден на сервере."
     
     logger.info(f"Сотрудник 'FactSearcher': Ищу факт по запросу: '{query}'")
     try:
         search = TavilySearch(max_results=1, api_key=TAVILY_API_KEY)
-        # ИСПРАВЛЕНИЕ: Мы больше не меняем запрос. Ищем то, что нам передали.
-        results = search.invoke(query)
+        # Выполняем поиск
+        results_data = search.invoke(query)
         
-        if not results:
-            return "Поиск в интернете не дал результатов по этому запросу."
+        logger.info(f"Получен ответ от Tavily: {results_data}")
 
-        # ИСПРАВЛЕНИЕ: LangChain TavilySearch возвращает list[dict].
-        # Правильно извлекаем 'content'.
-        if isinstance(results, list) and results and isinstance(results[0], dict):
-            return results[0].get('content', 'Не удалось извлечь информацию из результата.')
+        # --- НАДЕЖНАЯ ЛОГИКА ОБРАБОТКИ ОТВЕТА ---
+        if not results_data:
+            return "Поиск в интернете не дал результатов."
+
+        # Проверяем, это список словарей (стандартный ответ)
+        if isinstance(results_data, list) and results_data and isinstance(results_data[0], dict):
+            first_result = results_data[0]
+            answer = first_result.get('answer')
+            if answer:
+                return answer
+            return first_result.get('content', 'Не удалось извлечь контент из результата.')
+        
+        # Проверяем, это список строк (иногда бывает в старых версиях)
+        elif isinstance(results_data, list) and results_data and isinstance(results_data[0], str):
+            return results_data[0]
+            
         else:
-            logger.warning(f"Получен неожиданный формат от Tavily: {results}")
+            logger.warning(f"Получен неизвестный формат от Tavily: {results_data}")
             return "Получен неожиданный формат ответа от поисковой системы."
 
     except Exception as e:
-        logger.error(f"Ошибка в FactSearcher: {e}", exc_info=True)
-        return f"Произошла ошибка при поиске факта: {e}"
+        logger.error(f"Критическая ошибка в FactSearcher: {e}", exc_info=True)
+        return f"Произошла критическая ошибка при поиске факта: {e}"
 
-# Теперь у нас один, но очень умный и надежный сотрудник в отделе фактов
+# У нас один, универсальный сотрудник в отделе фактов
 fact_checker_tool = Tool(
     name="InternetFactSearcher",
     func=get_fact,
