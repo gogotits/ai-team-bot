@@ -4,23 +4,18 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferWindowMemory
 from core.config import llm
 
-# Импортируем всех наших экспертов и отделы
+# Импортируем всех наших экспертов НАПРЯМУЮ
 from tools.tool_researcher import researcher_tool
 from tools.tool_archivist import archivist_tool
 from tools.tool_secretary import secretary_tool
-# Импортируем нашего "начальника отдела"
-from tools.fact_checker_department.agent import fact_checker_agent_executor
+# ИСПРАВЛЕНИЕ: Импортируем не "отдел", а самого "сотрудника"
+from tools.fact_checker_department.tools import fact_checker_tool
 
 print("Инициализация Главного Агента и его команды...")
 
-# Собираем команду экспертов (начальников отделов)
+# Собираем команду из ПРЯМЫХ исполнителей
 main_tools = [
-    Tool(
-        name="FactCheckerDepartment",
-        # ИСПРАВЛЕНИЕ: Мы извлекаем только поле 'output' из ответа эксперта
-        func=lambda user_input_str: fact_checker_agent_executor.invoke({"input": user_input_str}).get('output', 'Эксперт не дал ответа.'),
-        description="Используй этот отдел для получения быстрых, фактических ответов на вопросы о мире (погода, новости, столицы, курсы валют и т.д.)."
-    ),
+    fact_checker_tool, # <-- Теперь это прямой инструмент
     researcher_tool,
     archivist_tool,
     secretary_tool,
@@ -30,12 +25,12 @@ main_tools = [
 system_prompt = """Ты — Главный Агент-Руководитель. Твоя задача — общаться с пользователем, помнить контекст диалога и делегировать задачи своей команде экспертов (инструментов).
 
 Твоя команда:
-- `FactCheckerDepartment`: Отдел быстрых фактов (погода, новости).
-- `DeepResearcher`: Отдел глубоких исследований и сохранения знаний.
-- `MemoryArchivist`: Отдел по работе с базой знаний.
-- `Secretary`: Отдел по созданию документов.
+- `FactSearcher`: Эксперт по быстрым фактам из интернета (погода, новости).
+- `DeepResearcher`: Эксперт по глубокому исследованию и сохранению знаний.
+- `MemoryArchivist`: Эксперт по работе с базой знаний.
+- `Secretary`: Эксперт по созданию документов.
 
-Твоя задача — понять истинную цель пользователя и выбрать ОДИН наиболее подходящий отдел для ее выполнения.
+Твоя задача — понять истинную цель пользователя и выбрать ОДНОГО наиболее подходящего эксперта для ее выполнения.
 """
 
 prompt = ChatPromptTemplate.from_messages([
