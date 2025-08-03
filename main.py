@@ -46,6 +46,7 @@ print(f"✅ Единая база знаний готова. Записей в �
 # --- 5. ФУНКЦИИ-ИНСТРУМЕНТЫ ДЛЯ ЭКСПЕРТОВ ---
 
 def research_and_learn(topic: str) -> str:
+    """Глубоко исследует тему, создает саммари и сохраняет в память."""
     logger.info(f"Эксперт 'DeepResearcher': Начинаю исследование по теме: {topic}")
     search = TavilySearch(max_results=3)
     try:
@@ -62,6 +63,7 @@ def research_and_learn(topic: str) -> str:
         return f"В процессе исследования произошла ошибка: {e}"
 
 def retrieve_from_memory(query: str) -> str:
+    """Ищет ответ на запрос в долгосрочной памяти."""
     logger.info(f"Эксперт 'MemoryArchivist': Поиск в памяти по запросу: {query}")
     docs = retriever.invoke(query)
     if not docs:
@@ -69,6 +71,7 @@ def retrieve_from_memory(query: str) -> str:
     return "\n".join([doc.page_content for doc in docs])
 
 def quick_internet_search(query: str) -> str:
+    """Для быстрых вопросов, не требующих сохранения в память."""
     logger.info(f"Эксперт 'FactChecker': Быстрый поиск по запросу: {query}")
     try:
         search = TavilySearch(max_results=1)
@@ -78,6 +81,7 @@ def quick_internet_search(query: str) -> str:
         return f"Ошибка при быстром поиске: {e}"
 
 def create_word_document(content: str) -> str:
+    """Создает документ Word (.docx)."""
     doc = WordDocument()
     doc.add_paragraph(content)
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx", prefix="report_")
@@ -85,6 +89,7 @@ def create_word_document(content: str) -> str:
     return f"Документ Word успешно создан: {temp_file.name}"
 
 def create_excel_document(content: str) -> str:
+    """Создает документ Excel (.xlsx)."""
     wb = ExcelWorkbook()
     ws = wb.active
     for line in content.split('\n'):
@@ -94,6 +99,7 @@ def create_excel_document(content: str) -> str:
     return f"Документ Excel успешно создан: {temp_file.name}"
 
 def create_pdf_document(content: str) -> str:
+    """Создает документ PDF (.pdf)."""
     pdf = FPDF()
     pdf.add_page()
     pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
